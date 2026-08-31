@@ -1,0 +1,8 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="全部服务（IDEA）" type="CompoundRunConfigurationType">
+    <toRun name="向量服务（IDEA）" type="MavenRunConfiguration" />
+    <toRun name="后端（IDEA）" type="SpringBootApplicationConfigurationType" />
+    <toRun name="前端（IDEA）" type="MavenRunConfiguration" />
+    <method v="2" />
+  </configuration>
+</component>

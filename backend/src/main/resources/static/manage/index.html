@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <title>云图库 · 本机控制台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%231748d1'/%3E%3Ctext x='10' y='43' font-size='29' fill='white'%3ECG%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <div class="brand">
+        <span class="brand-mark">CG</span>
+        <div>
+          <strong>云图库控制台</strong>
+          <small>LOCAL OPERATOR</small>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="管理功能">
+        <button class="nav-item active" data-tab="overview">
+          <span class="nav-index">01</span><span>连接与配置</span>
+        </button>
+        <button class="nav-item" data-tab="database">
+          <span class="nav-index">02</span><span>数据库</span>
+        </button>
+        <button class="nav-item" data-tab="redis">
+          <span class="nav-index">03</span><span>Redis</span>
+        </button>
+        <button class="nav-item" data-tab="dedupe">
+          <span class="nav-index">04</span><span>重复图片</span>
+        </button>
+      </nav>
+
+      <div class="rail-foot">
+        <span class="local-dot"></span>
+        <div><strong>仅本机工具</strong><small>无需图库账号登录</small></div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="kicker">AI COLLABORATIVE GALLERY / OPERATIONS</p>
+          <h1 id="page-title">连接与配置</h1>
+        </div>
+        <div class="top-actions">
+          <a class="button ghost" href="http://localhost:5173/" target="_blank" rel="noreferrer">打开图库 ↗</a>
+          <button class="button dark" id="refresh-all">刷新状态</button>
+        </div>
+      </header>
+
+      <section class="notice">
+        <span class="notice-sign">!</span>
+        <div>
+          <strong>这里的操作会直接修改本机正在使用的数据。</strong>
+          <p>表记录与 Redis 操作立即生效；MySQL、Redis、向量和百炼连接参数保存后需关闭启动窗口并重新双击 start.bat。</p>
+        </div>
+      </section>
+
+      <section class="panel active" data-panel="overview">
+        <div class="section-heading">
+          <div><span class="section-number">01</span><h2>运行状态</h2></div>
+          <p id="settings-path">正在读取本机配置…</p>
+        </div>
+        <div class="status-grid" id="status-grid"></div>
+
+        <form id="settings-form">
+          <div class="config-section">
+            <div class="config-title">
+              <div><span>A</span><h3>MySQL 数据库</h3></div>
+              <p>连接池在启动时建立，保存后重启项目生效。</p>
+            </div>
+            <div class="field-grid columns-6">
+              <label class="field span-4"><span>JDBC 地址</span><input data-setting="database.url" data-source="databaseUrl" placeholder="jdbc:mysql://localhost:3306/cloud_gallery?..." autocomplete="off"></label>
+              <label class="field span-2"><span>用户名</span><input data-setting="database.username" data-source="databaseUsername" placeholder="root" autocomplete="off"></label>
+              <label class="field span-3"><span>密码 <em id="database-password-state"></em></span><input type="password" data-setting="database.password" data-secret="true" placeholder="留空保留，输入 __CLEAR__ 清除" autocomplete="new-password"></label>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <div class="config-title">
+              <div><span>B</span><h3>Redis</h3></div>
+              <p>会话与缓存连接配置，保存后重启项目生效。</p>
+            </div>
+            <div class="field-grid columns-6">
+              <label class="field span-2"><span>主机</span><input data-setting="redis.host" data-source="redisHost" placeholder="127.0.0.1"></label>
+              <label class="field"><span>端口</span><input type="number" min="1" max="65535" data-setting="redis.port" data-source="redisPort" placeholder="6379"></label>
+              <label class="field"><span>数据库编号</span><input type="number" min="0" max="1024" data-setting="redis.database" data-source="redisDatabase" placeholder="1"></label>
+              <label class="field span-2"><span>密码 <em id="redis-password-state"></em></span><input type="password" data-setting="redis.password" data-secret="true" placeholder="留空保留，输入 __CLEAR__ 清除" autocomplete="new-password"></label>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <div class="config-title">
+              <div><span>C</span><h3>腾讯云 COS</h3></div>
+              <p>对象存储配置保存后，新上传和读取请求立即使用新参数。</p>
+            </div>
+            <div class="field-grid columns-6">
+              <label class="field span-3"><span>HTTPS 访问域名</span><input data-setting="cos.host" data-source="cosHost" placeholder="https://bucket.cos.region.myqcloud.com"></label>
+              <label class="field"><span>地域</span><input data-setting="cos.region" data-source="cosRegion" placeholder="ap-shanghai"></label>
+              <label class="field span-2"><span>存储桶</span><input data-setting="cos.bucket" data-source="cosBucket" placeholder="bucket-appid"></label>
+              <label class="field span-3"><span>SecretId <em id="cos-id-state"></em></span><input type="password" data-setting="cos.secretId" data-secret="true" placeholder="留空保留，输入 __CLEAR__ 清除" autocomplete="new-password"></label>
+              <label class="field span-3"><span>SecretKey <em id="cos-key-state"></em></span><input type="password" data-setting="cos.secretKey" data-secret="true" placeholder="留空保留，输入 __CLEAR__ 清除" autocomplete="new-password"></label>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <div class="config-title">
+              <div><span>D</span><h3>向量与百炼</h3></div>
+              <p>向量数据仍保存在本机 Chroma；连接与 API Key 保存后重启生效。</p>
+            </div>
+            <div class="field-grid columns-6">
+              <label class="field span-3"><span>向量服务地址</span><input data-setting="vector.serviceUrl" data-source="vectorServiceUrl" placeholder="http://127.0.0.1:18001"></label>
+              <label class="field span-3"><span>百炼 API Key <em id="aliyun-key-state"></em></span><input type="password" data-setting="aliyun.apiKey" data-secret="true" placeholder="留空保留，输入 __CLEAR__ 清除" autocomplete="new-password"></label>
+            </div>
+          </div>
+
+          <div class="save-bar">
+            <div><strong>配置写入本机 runtime-data</strong><span>密钥和图片不会进入 Git 仓库</span></div>
+            <button class="button accent" type="submit" id="save-settings">保存全部配置</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel" data-panel="database">
+        <div class="section-heading">
+          <div><span class="section-number">02</span><h2>数据库表数据</h2></div>
+          <p>支持分页浏览、新增、JSON 编辑和物理删除。</p>
+        </div>
+        <div class="tool-row">
+          <label class="compact-field"><span>数据表</span><select id="table-select"><option value="">选择数据表</option></select></label>
+          <button class="button ghost" id="reload-tables">刷新表清单</button>
+          <button class="button dark" id="insert-row" disabled>新增记录</button>
+          <div class="tool-summary" id="table-summary">尚未选择数据表</div>
+        </div>
+        <div class="data-frame">
+          <table class="data-table" id="database-table"><thead></thead><tbody></tbody></table>
+          <div class="empty-state" id="database-empty">选择一个数据表以查看内容</div>
+        </div>
+        <div class="pager" id="database-pager" hidden>
+          <button class="button ghost small" id="previous-page">上一页</button>
+          <span id="page-label">第 1 页</span>
+          <button class="button ghost small" id="next-page">下一页</button>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="redis">
+        <div class="section-heading">
+          <div><span class="section-number">03</span><h2>Redis 键空间</h2></div>
+          <p>使用 SCAN 查询，最多展示 100 个键。</p>
+        </div>
+        <div class="tool-row">
+          <label class="compact-field grow"><span>键模式</span><input id="redis-pattern" value="*" placeholder="gallery:*"></label>
+          <button class="button ghost" id="search-redis">搜索键</button>
+          <button class="button dark" id="new-redis">新增字符串键</button>
+        </div>
+        <div class="data-frame">
+          <table class="data-table redis-table" id="redis-table">
+            <thead><tr><th>键</th><th>类型</th><th>TTL</th><th>值预览</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div class="empty-state" id="redis-empty">正在读取 Redis…</div>
+        </div>
+      </section>
+
+      <section class="panel" data-panel="dedupe">
+        <div class="section-heading">
+          <div><span class="section-number">04</span><h2>重复图片清理</h2></div>
+          <p>使用本机 Chroma 向量，只清理相似度至少 0.999999 且位于同一空间的记录。</p>
+        </div>
+        <div class="tool-row">
+          <button class="button ghost" id="preview-duplicates">扫描重复图片</button>
+          <button class="button danger" id="execute-dedup" disabled>只保留每组最早的一张</button>
+          <div class="tool-summary" id="dedupe-summary">尚未扫描</div>
+        </div>
+        <div class="dedupe-grid" id="dedupe-grid"></div>
+        <div class="data-frame">
+          <table class="data-table" id="dedupe-table">
+            <thead><tr><th>保留图片 ID</th><th>名称</th><th>空间</th><th>将删除的图片 ID</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div class="empty-state" id="dedupe-empty">点击“扫描重复图片”生成预览，不会修改任何数据</div>
+        </div>
+        <p class="audit-note" id="dedupe-audit" hidden></p>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="row-dialog" class="modal">
+    <form method="dialog" class="modal-card" id="row-form">
+      <header><div><small>DATABASE RECORD</small><h3 id="row-dialog-title">新增数据库记录</h3></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <p class="modal-tip">使用 JSON 对象编辑字段。删除不需要写入的字段，使用 null 写入数据库 NULL。</p>
+      <textarea id="row-json" rows="18" spellcheck="false"></textarea>
+      <footer><button class="button ghost" value="cancel">取消</button><button class="button accent" type="button" id="save-row">保存记录</button></footer>
+    </form>
+  </dialog>
+
+  <dialog id="redis-dialog" class="modal">
+    <form method="dialog" class="modal-card narrow" id="redis-form">
+      <header><div><small>REDIS STRING</small><h3>字符串键</h3></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
+      <label class="field"><span>键</span><input id="redis-key" required></label>
+      <label class="field"><span>值</span><textarea id="redis-value" rows="8"></textarea></label>
+      <label class="field"><span>TTL（秒，-1 表示永久）</span><input id="redis-ttl" type="number" min="-1" value="-1"></label>
+      <footer><button class="button ghost" value="cancel">取消</button><button class="button accent" type="button" id="save-redis">保存</button></footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="./app.js" defer></script>
+</body>
+</html>
