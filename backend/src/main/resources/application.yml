@@ -1,0 +1,74 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: AI 协同云图库
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/cloud_gallery?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+  redis:
+    database: ${REDIS_DATABASE:1}
+    host: ${REDIS_HOST:127.0.0.1}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 5000
+  session:
+    store-type: redis
+    timeout: 2592000
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 12MB
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: false
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      logic-delete-field: isDeleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+knife4j:
+  enable: true
+  openapi:
+    title: AI 协同云图库接口文档
+    version: v2.0
+    group:
+      default:
+        api-rule: package
+        api-rule-resources:
+          - com.zys.backend.controller
+
+# 腾讯云 COS 与本地向量服务
+gallery:
+  settings:
+    path: ${GALLERY_SETTINGS_PATH:${user.dir}/../runtime-data/system-settings.properties}
+  storage:
+    # 仅用于兼容读取改造前已经落盘的图片，新图片不再写入该目录。
+    root: ${GALLERY_STORAGE_ROOT:${user.dir}/data/storage}
+    public-base-url: ${GALLERY_PUBLIC_BASE_URL:http://localhost:8080/api/files}
+  vector:
+    enabled: ${VECTOR_ENABLED:true}
+    service-url: ${VECTOR_SERVICE_URL:http://127.0.0.1:18001}
+    connect-timeout-ms: ${VECTOR_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${VECTOR_READ_TIMEOUT_MS:120000}
+
+cos:
+  client:
+    host: ${COS_HOST:}
+    secretId: ${COS_SECRET_ID:}
+    secretKey: ${COS_SECRET_KEY:}
+    region: ${COS_REGION:ap-shanghai}
+    bucket: ${COS_BUCKET:}
+
+# 可选功能：未配置密钥时，AI 扩图/编辑接口不可用
+aliYunAi:
+  apiKey: ${ALIYUN_AI_API_KEY:}
+  imageEditModel: ${ALIYUN_IMAGE_EDIT_MODEL:qwen-image-2.0-pro}
