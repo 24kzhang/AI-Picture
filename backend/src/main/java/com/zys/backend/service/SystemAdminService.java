@@ -367,6 +367,11 @@ public class SystemAdminService {
                 column.put("autoIncrement",
                         "YES".equalsIgnoreCase(resultSet.getString("IS_AUTOINCREMENT")));
                 column.put("primaryKey", primaryKeys.contains(name));
+                column.put("size", resultSet.getInt("COLUMN_SIZE"));
+                int decimalDigits = resultSet.getInt("DECIMAL_DIGITS");
+                column.put("decimalDigits", resultSet.wasNull() ? 0 : decimalDigits);
+                column.put("defaultValue", resultSet.getString("COLUMN_DEF"));
+                column.put("remarks", resultSet.getString("REMARKS"));
                 columns.add(column);
             }
         }

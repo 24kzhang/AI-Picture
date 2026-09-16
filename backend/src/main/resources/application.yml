@@ -6,6 +6,12 @@ server:
 spring:
   application:
     name: AI 协同云图库
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+          max-age: 0
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/cloud_gallery?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false}
     driver-class-name: com.mysql.cj.jdbc.Driver
