@@ -24,10 +24,33 @@ import time
 
 GALLERY_AUDIENCE = "retouch-agent"
 AGENT_AUDIENCE = "cloud-gallery"
+ASSET_AUDIENCE = "agent-asset"
 
 MAX_TTL_SECONDS = 300
+MAX_ASSET_TTL_SECONDS = 24 * 3600
 # 允许的时钟偏差
 _CLOCK_SKEW_SECONDS = 10
+
+
+def _sign(body: dict, secret: str) -> str:
+    raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    signature = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
+    return f"{_b64encode(raw.encode())}.{_b64encode(signature)}"
+
+
+def _parse(token: str) -> tuple[bytes, bytes] | None:
+    try:
+        raw_b64, signature_b64 = token.split(".", 1)
+        raw = _b64decode(raw_b64)
+        signature = _b64decode(signature_b64)
+    except (ValueError, TypeError):
+        return None
+    return raw, signature
+
+
+def _valid_signature(raw: bytes, signature: bytes, secret: str) -> bool:
+    expected = hmac.new(secret.encode(), raw, hashlib.sha256).digest()
+    return hmac.compare_digest(signature, expected)
 
 
 def _b64encode(data: bytes) -> str:
@@ -56,19 +79,17 @@ def issue(
         "exp": now + ttl_seconds,
         "nonce": secrets.token_hex(8),
     }
-    raw = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    signature = hmac.new(secret.encode(), raw.encode(), hashlib.sha256).digest()
-    return f"{_b64encode(raw.encode())}.{_b64encode(signature)}"
+    return _sign(body, secret)
 
 
 def verify(token: str, secret: str, audience: str) -> dict | None:
     """校验服务令牌；任何无效情形统一返回 None，由调用方按未认证处理。"""
+    parsed = _parse(token)
+    if parsed is None:
+        return None
+    raw, signature = parsed
     try:
-        raw_b64, signature_b64 = token.split(".", 1)
-        raw = _b64decode(raw_b64)
-        signature = _b64decode(signature_b64)
-        expected = hmac.new(secret.encode(), raw, hashlib.sha256).digest()
-        if not hmac.compare_digest(signature, expected):
+        if not _valid_signature(raw, signature, secret):
             return None
         body = json.loads(raw)
         if not isinstance(body, dict):
@@ -87,5 +108,45 @@ def verify(token: str, secret: str, audience: str) -> dict | None:
         if not isinstance(uid, str) or not uid.isdigit() or len(uid) > 19:
             return None
         return body
-    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def issue_object_token(object_key: str, secret: str, ttl_seconds: int = 3600) -> str:
+    """签发素材访问令牌（浏览器经云图库网关查看 Agent 素材用）。"""
+    if ttl_seconds <= 0 or ttl_seconds > MAX_ASSET_TTL_SECONDS:
+        raise ValueError(f"素材访问令牌有效期必须在 1~{MAX_ASSET_TTL_SECONDS} 秒之间")
+    now = int(time.time())
+    body = {
+        "obj": object_key,
+        "aud": ASSET_AUDIENCE,
+        "iat": now,
+        "exp": now + ttl_seconds,
+        "nonce": secrets.token_hex(8),
+    }
+    return _sign(body, secret)
+
+
+def read_object_token(token: str, secret: str) -> str | None:
+    """校验素材访问令牌并返回对象键；无效返回 None。"""
+    parsed = _parse(token)
+    if parsed is None:
+        return None
+    raw, signature = parsed
+    try:
+        if not _valid_signature(raw, signature, secret):
+            return None
+        body = json.loads(raw)
+        if body.get("aud") != ASSET_AUDIENCE:
+            return None
+        iat, exp = body.get("iat"), body.get("exp")
+        if not isinstance(iat, int) or not isinstance(exp, int):
+            return None
+        if exp < time.time() or iat > time.time() + _CLOCK_SKEW_SECONDS:
+            return None
+        object_key = body.get("obj")
+        if not isinstance(object_key, str) or not object_key:
+            return None
+        return object_key
+    except (KeyError, TypeError, json.JSONDecodeError):
         return None

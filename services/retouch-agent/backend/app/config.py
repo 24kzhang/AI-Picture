@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     # 签名 URL 有效期，秒
     s3_url_ttl: int = 900
 
+    # 存储后端：s3（独立开发直连对象存储）| bridge（经云图库 Spring Boot 签名 URL 访问 COS）
+    storage_backend: str = "s3"
+    # 云图库内部桥接基地址（如 http://127.0.0.1:8080/api/agent-internal），bridge 模式必填
+    gallery_bridge_url: str = ""
+    # 浏览器可达的云图库公网地址，bridge 模式用于拼接素材展示 URL
+    gallery_public_url: str = ""
+    # 素材展示 URL 有效期，秒
+    asset_url_ttl_seconds: int = 3600
+
     # HS256 要求密钥不短于 32 字节
     jwt_secret: str = "dev-only-secret-please-change-in-production"
     jwt_ttl_hours: int = 24

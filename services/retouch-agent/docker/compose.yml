@@ -73,6 +73,9 @@ services:
       S3_PUBLIC_ENDPOINT: http://localhost:7313
       INTEGRATION_MODE: ${AGENT_INTEGRATION_MODE:-false}
       SERVICE_TOKEN_SECRET: ${AGENT_SERVICE_TOKEN_SECRET:-}
+      STORAGE_BACKEND: ${AGENT_STORAGE_BACKEND:-s3}
+      GALLERY_BRIDGE_URL: ${AGENT_GALLERY_BRIDGE_URL:-}
+      GALLERY_PUBLIC_URL: ${AGENT_GALLERY_PUBLIC_URL:-}
     volumes:
       - cv_models:/root/.u2net
     depends_on:
@@ -95,6 +98,9 @@ services:
       S3_PUBLIC_ENDPOINT: http://localhost:7313
       INTEGRATION_MODE: ${AGENT_INTEGRATION_MODE:-false}
       SERVICE_TOKEN_SECRET: ${AGENT_SERVICE_TOKEN_SECRET:-}
+      STORAGE_BACKEND: ${AGENT_STORAGE_BACKEND:-s3}
+      GALLERY_BRIDGE_URL: ${AGENT_GALLERY_BRIDGE_URL:-}
+      GALLERY_PUBLIC_URL: ${AGENT_GALLERY_PUBLIC_URL:-}
     volumes:
       - cv_models:/root/.u2net
     depends_on:
