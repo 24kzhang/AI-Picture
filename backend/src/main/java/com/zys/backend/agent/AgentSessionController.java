@@ -129,6 +129,17 @@ public class AgentSessionController {
     }
 
     /**
+     * 编辑租约心跳续租（前端每 20 秒调用一次）
+     */
+    @PostMapping("/agent-sessions/{sessionId}/lease/heartbeat")
+    public BaseResponse<Boolean> leaseHeartbeat(
+            @PathVariable("sessionId") long sessionId,
+            HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(editSessionService.heartbeat(sessionId, loginUser));
+    }
+
+    /**
      * 发送对话消息
      */
     @PostMapping("/agent-sessions/{sessionId}/messages")

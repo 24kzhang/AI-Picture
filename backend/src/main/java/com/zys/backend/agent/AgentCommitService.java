@@ -11,7 +11,9 @@ import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.exception.ThrowUtils;
 import com.zys.backend.manager.CosStorageManager;
+import com.zys.backend.manager.PictureVersionManager;
 import com.zys.backend.manager.auth.model.SpaceUserPermissionConstant;
+import com.zys.backend.manager.lease.EditLeaseService;
 import com.zys.backend.mapper.IntegrationOutboxMapper;
 import com.zys.backend.mapper.PictureEditSessionMapper;
 import com.zys.backend.mapper.PictureVersionMapper;
@@ -86,7 +88,25 @@ public class AgentCommitService {
     private CosStorageManager cosStorageManager;
 
     @Resource
+    private PictureVersionManager pictureVersionManager;
+
+    @Resource
+    private EditLeaseService editLeaseService;
+
+    @Resource
     private TransactionTemplate transactionTemplate;
+
+    /**
+     * 校验当前会话仍持有 Agent 编辑租约；锁丢失后禁止提交，任务结果保留为草稿
+     */
+    private void requireAgentLease(PictureEditSession record) {
+        boolean held = editLeaseService.isHeldBy(record.getPictureId(),
+                EditLeaseService.MODE_AGENT, record.getUserId(), String.valueOf(record.getId()));
+        if (!held) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "编辑租约已失效，结果仅保留为草稿，请重新进入工作台");
+        }
+    }
 
     /**
      * 选定最终草稿，会话进入待提交状态
@@ -94,6 +114,7 @@ public class AgentCommitService {
     public AgentSessionVO setFinalAsset(Long sessionId, String assetId, User loginUser) {
         PictureEditSession record = loadSession(sessionId);
         checkOwner(record, loginUser);
+        requireAgentLease(record);
         ThrowUtils.throwIf(assetId == null || assetId.isBlank(), ErrorCode.PARAMS_ERROR, "素材 id 不能为空");
         String status = record.getStatus();
         ThrowUtils.throwIf(!PictureEditSessionStatusEnum.ACTIVE.getValue().equals(status)
@@ -133,6 +154,7 @@ public class AgentCommitService {
                 ErrorCode.OPERATION_ERROR, "会话不可用（状态：" + status + "）");
         ThrowUtils.throwIf(record.getFinalAgentAssetId() == null,
                 ErrorCode.OPERATION_ERROR, "请先选定最终草稿");
+        requireAgentLease(record);
 
         Picture picture = pictureService.getById(record.getPictureId());
         ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
@@ -150,29 +172,26 @@ public class AgentCommitService {
         }
 
         // 懒建初始版本（V1 图片首次进入版本体系），必须先于版本号分配
-        ensureInitialVersion(picture, loginUser.getId());
+        pictureVersionManager.ensureInitialVersion(picture);
         // 下载最终草稿并验证可解码（版本号先分配，COS 键与版本记录保持一致）
-        long versionNo = nextVersionNo(picture.getId());
+        long versionNo = pictureVersionManager.nextVersionNo(picture.getId());
         UploadPictureResult uploaded = downloadAndStoreVersion(record, picture, versionNo);
+        PictureVersionVO vo;
         try {
-            return transactionTemplate.execute(txStatus -> {
+            vo = transactionTemplate.execute(txStatus -> {
                 // 1. 插入新版本
-                PictureVersion version = new PictureVersion();
-                version.setPictureId(picture.getId());
-                version.setVersionNo(versionNo);
-                version.setUrl(uploaded.getUrl());
-                version.setThumbnailUrl(uploaded.getThumbnailUrl());
-                version.setPicSize(uploaded.getPicSize());
-                version.setPicWidth(uploaded.getPicWidth());
-                version.setPicHeight(uploaded.getPicHeight());
-                version.setPicScale(uploaded.getPicScale());
-                version.setPicFormat(uploaded.getPicFormat());
-                version.setPicColor(uploaded.getPicColor());
-                version.setSource(PictureVersionSourceEnum.AGENT.getValue());
-                version.setSourceSessionId(record.getId());
-                version.setOperatorId(loginUser.getId());
-                version.setCreateTime(new Date());
-                pictureVersionMapper.insert(version);
+                Picture newValues = new Picture();
+                newValues.setId(picture.getId());
+                newValues.setUrl(uploaded.getUrl());
+                newValues.setThumbnailUrl(uploaded.getThumbnailUrl());
+                newValues.setPicSize(uploaded.getPicSize());
+                newValues.setPicWidth(uploaded.getPicWidth());
+                newValues.setPicHeight(uploaded.getPicHeight());
+                newValues.setPicScale(uploaded.getPicScale());
+                newValues.setPicFormat(uploaded.getPicFormat());
+                newValues.setPicColor(uploaded.getPicColor());
+                PictureVersion version = pictureVersionManager.recordVersion(newValues, versionNo,
+                        PictureVersionSourceEnum.AGENT, record.getId(), null, loginUser.getId());
                 // 2. 乐观锁更新图片
                 LambdaUpdateWrapper<Picture> update = new LambdaUpdateWrapper<Picture>()
                         .eq(Picture::getId, picture.getId())
@@ -214,6 +233,10 @@ public class AgentCommitService {
             cleanupOrphan(uploaded);
             throw e;
         }
+        // 提交成功，释放编辑租约
+        editLeaseService.releaseForSession(record.getPictureId(), EditLeaseService.MODE_AGENT,
+                record.getUserId(), String.valueOf(record.getId()));
+        return vo;
     }
 
     /**
@@ -245,55 +268,62 @@ public class AgentCommitService {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
         }
 
-        // 懒建初始版本后下载旧版本内容，复制到新版本目录
-        ensureInitialVersion(picture, loginUser.getId());
-        long versionNo = nextVersionNo(picture.getId());
-        UploadPictureResult uploaded = downloadUrlAndStoreVersion(source.getUrl(), picture, versionNo);
+        // 恢复也要持有编辑租约：临时占用 AGENT 锁，结束后释放
+        String restoreSessionId = "restore-" + pictureId;
+        EditLeaseService.Lease lease = editLeaseService.tryAcquire(pictureId,
+                EditLeaseService.MODE_AGENT, loginUser.getId(), restoreSessionId);
+        ThrowUtils.throwIf(lease == null, ErrorCode.OPERATION_ERROR,
+                "另一位用户正在编辑该图片，请稍后再试");
         try {
-            return transactionTemplate.execute(txStatus -> {
-                PictureVersion version = new PictureVersion();
-                version.setPictureId(picture.getId());
-                version.setVersionNo(versionNo);
-                version.setUrl(uploaded.getUrl());
-                version.setThumbnailUrl(uploaded.getThumbnailUrl());
-                version.setPicSize(uploaded.getPicSize());
-                version.setPicWidth(uploaded.getPicWidth());
-                version.setPicHeight(uploaded.getPicHeight());
-                version.setPicScale(uploaded.getPicScale());
-                version.setPicFormat(uploaded.getPicFormat());
-                version.setPicColor(uploaded.getPicColor());
-                version.setSource(PictureVersionSourceEnum.RESTORE.getValue());
-                version.setOperatorId(loginUser.getId());
-                version.setCreateTime(new Date());
-                pictureVersionMapper.insert(version);
-                LambdaUpdateWrapper<Picture> update = new LambdaUpdateWrapper<Picture>()
-                        .eq(Picture::getId, picture.getId())
-                        .eq(Picture::getEditVersion, currentVersion)
-                        .set(Picture::getUrl, uploaded.getUrl())
-                        .set(Picture::getThumbnailUrl, uploaded.getThumbnailUrl())
-                        .set(Picture::getPicSize, uploaded.getPicSize())
-                        .set(Picture::getPicWidth, uploaded.getPicWidth())
-                        .set(Picture::getPicHeight, uploaded.getPicHeight())
-                        .set(Picture::getPicScale, uploaded.getPicScale())
-                        .set(Picture::getPicFormat, uploaded.getPicFormat())
-                        .set(Picture::getPicColor, uploaded.getPicColor())
-                        .set(Picture::getCurrentVersionId, version.getId())
-                        .set(Picture::getEditTime, new Date())
-                        .setSql("editVersion = editVersion + 1");
-                if (!pictureService.update(update)) {
-                    throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
-                }
-                if (picture.getSpaceId() != null) {
-                    long diff = uploaded.getPicSize() - (picture.getPicSize() == null ? 0L : picture.getPicSize());
-                    applySpaceSizeDelta(picture.getSpaceId(), diff);
-                }
-                writeOutbox("PICTURE_VERSION_COMMITTED", picture.getId(), version, null, loginUser);
-                writeOutbox("PICTURE_VECTOR_REINDEX_REQUIRED", picture.getId(), version, null, loginUser);
-                return toVersionVO(version);
-            });
-        } catch (RuntimeException e) {
-            cleanupOrphan(uploaded);
-            throw e;
+            // 懒建初始版本后下载旧版本内容，复制到新版本目录
+            pictureVersionManager.ensureInitialVersion(picture);
+            long versionNo = pictureVersionManager.nextVersionNo(picture.getId());
+            UploadPictureResult uploaded = downloadUrlAndStoreVersion(source.getUrl(), picture, versionNo);
+            try {
+                return transactionTemplate.execute(txStatus -> {
+                    Picture newValues = new Picture();
+                    newValues.setId(picture.getId());
+                    newValues.setUrl(uploaded.getUrl());
+                    newValues.setThumbnailUrl(uploaded.getThumbnailUrl());
+                    newValues.setPicSize(uploaded.getPicSize());
+                    newValues.setPicWidth(uploaded.getPicWidth());
+                    newValues.setPicHeight(uploaded.getPicHeight());
+                    newValues.setPicScale(uploaded.getPicScale());
+                    newValues.setPicFormat(uploaded.getPicFormat());
+                    newValues.setPicColor(uploaded.getPicColor());
+                    PictureVersion version = pictureVersionManager.recordVersion(newValues, versionNo,
+                            PictureVersionSourceEnum.RESTORE, null, null, loginUser.getId());
+                    LambdaUpdateWrapper<Picture> update = new LambdaUpdateWrapper<Picture>()
+                            .eq(Picture::getId, picture.getId())
+                            .eq(Picture::getEditVersion, currentVersion)
+                            .set(Picture::getUrl, uploaded.getUrl())
+                            .set(Picture::getThumbnailUrl, uploaded.getThumbnailUrl())
+                            .set(Picture::getPicSize, uploaded.getPicSize())
+                            .set(Picture::getPicWidth, uploaded.getPicWidth())
+                            .set(Picture::getPicHeight, uploaded.getPicHeight())
+                            .set(Picture::getPicScale, uploaded.getPicScale())
+                            .set(Picture::getPicFormat, uploaded.getPicFormat())
+                            .set(Picture::getPicColor, uploaded.getPicColor())
+                            .set(Picture::getCurrentVersionId, version.getId())
+                            .set(Picture::getEditTime, new Date())
+                            .setSql("editVersion = editVersion + 1");
+                    if (!pictureService.update(update)) {
+                        throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
+                    }
+                    if (picture.getSpaceId() != null) {
+                        long diff = uploaded.getPicSize() - (picture.getPicSize() == null ? 0L : picture.getPicSize());
+                        applySpaceSizeDelta(picture.getSpaceId(), diff);
+                    }
+                    writeOutbox("PICTURE_VERSION_COMMITTED", picture.getId(), version, null, loginUser);
+                    writeOutbox("PICTURE_VECTOR_REINDEX_REQUIRED", picture.getId(), version, null, loginUser);
+                    return toVersionVO(version);
+                });
+            } catch (RuntimeException e) {
+                cleanupOrphan(uploaded);
+                throw e;
+            }
+        } finally {
+            editLeaseService.release(pictureId, lease.getLockToken());
         }
     }
 
@@ -374,38 +404,6 @@ public class AgentCommitService {
                 .filter(asset -> assetId.equals(asset.getId()))
                 .findFirst()
                 .orElse(null);
-    }
-
-    private void ensureInitialVersion(Picture picture, Long operatorId) {
-        Long count = pictureVersionMapper.selectCount(
-                new QueryWrapper<PictureVersion>().eq("pictureId", picture.getId()));
-        if (count != null && count > 0) {
-            return;
-        }
-        PictureVersion initial = new PictureVersion();
-        initial.setPictureId(picture.getId());
-        initial.setVersionNo(1L);
-        initial.setUrl(picture.getUrl());
-        initial.setThumbnailUrl(picture.getThumbnailUrl());
-        initial.setPicSize(picture.getPicSize());
-        initial.setPicWidth(picture.getPicWidth());
-        initial.setPicHeight(picture.getPicHeight());
-        initial.setPicScale(picture.getPicScale());
-        initial.setPicFormat(picture.getPicFormat());
-        initial.setPicColor(picture.getPicColor());
-        initial.setSource(PictureVersionSourceEnum.UPLOAD.getValue());
-        initial.setOperatorId(picture.getUserId() == null ? operatorId : picture.getUserId());
-        initial.setCreateTime(new Date());
-        pictureVersionMapper.insert(initial);
-    }
-
-    private long nextVersionNo(Long pictureId) {
-        PictureVersion latest = pictureVersionMapper.selectOne(
-                new QueryWrapper<PictureVersion>()
-                        .eq("pictureId", pictureId)
-                        .orderByDesc("versionNo")
-                        .last("limit 1"));
-        return latest == null ? 1L : latest.getVersionNo() + 1;
     }
 
     private void applySpaceSizeDelta(Long spaceId, long delta) {

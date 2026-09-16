@@ -74,6 +74,11 @@ public class AgentSessionVO {
     private Boolean readOnly;
 
     /**
+     * 统一编辑租约信息；无人持有时为 null
+     */
+    private AgentLeaseVO lease;
+
+    /**
      * 画布快照（图层文档、图片墙、修订号、可撤销/重做）
      */
     private AgentSessionDetailDTO canvas;
@@ -82,4 +87,31 @@ public class AgentSessionVO {
      * 最近对话轮次
      */
     private List<AgentTurnVO> turns = new ArrayList<>();
+
+    /**
+     * 编辑租约视图（不含 lockToken）
+     */
+    @Data
+    public static class AgentLeaseVO {
+
+        /**
+         * 租约模式：QUICK/AGENT
+         */
+        private String mode;
+
+        /**
+         * 持有者用户 id
+         */
+        private Long userId;
+
+        /**
+         * 持有者会话标识
+         */
+        private String sessionId;
+
+        /**
+         * 获取时间戳（毫秒）
+         */
+        private Long acquiredAt;
+    }
 }

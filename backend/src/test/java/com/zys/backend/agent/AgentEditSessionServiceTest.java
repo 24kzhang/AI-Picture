@@ -67,6 +67,9 @@ class AgentEditSessionServiceTest {
     private CosStorageManager cosStorageManager;
 
     @Mock
+    private com.zys.backend.manager.lease.EditLeaseService editLeaseService;
+
+    @Mock
     private StringRedisTemplate stringRedisTemplate;
 
     @Mock
@@ -83,6 +86,17 @@ class AgentEditSessionServiceTest {
         loginUser.setUserRole("user");
         lenient().when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
         lenient().when(agentClient.isEnabled()).thenReturn(true);
+        // 默认持有 Agent 租约
+        com.zys.backend.manager.lease.EditLeaseService.Lease lease =
+                new com.zys.backend.manager.lease.EditLeaseService.Lease();
+        lease.setMode("AGENT");
+        lease.setUserId(2L);
+        lease.setLockToken("token-1");
+        lenient().when(editLeaseService.tryAcquire(anyLong(), any(), anyLong(), any()))
+                .thenReturn(lease);
+        lenient().when(editLeaseService.isHeldBy(anyLong(), any(), anyLong(), any()))
+                .thenReturn(true);
+        lenient().when(editLeaseService.current(anyLong())).thenReturn(lease);
     }
 
     private Picture picture() {

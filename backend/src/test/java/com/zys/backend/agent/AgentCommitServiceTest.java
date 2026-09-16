@@ -70,6 +70,12 @@ class AgentCommitServiceTest {
     private CosStorageManager cosStorageManager;
 
     @Mock
+    private com.zys.backend.manager.PictureVersionManager pictureVersionManager;
+
+    @Mock
+    private com.zys.backend.manager.lease.EditLeaseService editLeaseService;
+
+    @Mock
     private TransactionTemplate transactionTemplate;
 
     @InjectMocks
@@ -81,6 +87,16 @@ class AgentCommitServiceTest {
     void setUp() {
         loginUser.setId(2L);
         loginUser.setUserRole("user");
+        // 默认持有 Agent 租约（冲突/守卫场景在租约校验之后触发）
+        lenient().when(editLeaseService.isHeldBy(anyLong(), any(), anyLong(), any()))
+                .thenReturn(true);
+        com.zys.backend.manager.lease.EditLeaseService.Lease lease =
+                new com.zys.backend.manager.lease.EditLeaseService.Lease();
+        lease.setMode("AGENT");
+        lease.setUserId(2L);
+        lease.setLockToken("token-1");
+        lenient().when(editLeaseService.tryAcquire(anyLong(), any(), anyLong(), any()))
+                .thenReturn(lease);
     }
 
     private PictureEditSession session(String status, Long editVersionBase) {

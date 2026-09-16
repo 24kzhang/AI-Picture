@@ -14,6 +14,7 @@ import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.exception.ThrowUtils;
 import com.zys.backend.manager.CosStorageManager;
+import com.zys.backend.manager.lease.EditLeaseService;
 import com.zys.backend.mapper.PictureEditRunMapper;
 import com.zys.backend.mapper.PictureEditSessionMapper;
 import com.zys.backend.model.entity.Picture;
@@ -72,6 +73,9 @@ public class AgentEditSessionService {
     private CosStorageManager cosStorageManager;
 
     @Resource
+    private EditLeaseService editLeaseService;
+
+    @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     /**
@@ -93,33 +97,57 @@ public class AgentEditSessionService {
             }
         }
 
-        // 复用当前用户在同一图片上的活动会话
+        // 复用当前用户在同一图片上的活动会话（并重取租约：锁可能已过期）
         PictureEditSession active = findActiveSession(pictureId, loginUser.getId());
         if (active != null) {
+            editLeaseService.tryAcquire(pictureId, EditLeaseService.MODE_AGENT,
+                    loginUser.getId(), String.valueOf(active.getId()));
             return rememberIdempotency(active, idempotencyKey, loginUser.getId());
         }
 
-        // 源图上传到 Agent
-        AgentCallContext context = buildContext(loginUser, picture);
-        String assetId = uploadSourceAsset(picture, context);
-
-        AgentSessionDetailDTO detail = agentClient.createSession(assetId, null,
-                picture.getName(), context);
-        ThrowUtils.throwIf(detail == null || detail.getId() == null,
-                ErrorCode.OPERATION_ERROR, "创建修图会话失败");
-
+        // 先落 DRAFT 会话记录（拿到会话 id 作为租约身份），再抢统一编辑租约
         PictureEditSession record = new PictureEditSession();
-        record.setAgentSessionId(detail.getId());
+        String placeholderSessionId = java.util.UUID.randomUUID().toString();
+        record.setAgentSessionId(placeholderSessionId);
         record.setPictureId(pictureId);
         record.setSpaceId(picture.getSpaceId());
         record.setUserId(loginUser.getId());
         record.setBaseEditVersion(picture.getEditVersion() == null ? 0L : picture.getEditVersion());
-        record.setStatus(PictureEditSessionStatusEnum.ACTIVE.getValue());
+        record.setStatus(PictureEditSessionStatusEnum.DRAFT.getValue());
         Date now = new Date();
         record.setCreateTime(now);
         record.setUpdateTime(now);
         record.setExpireTime(new Date(now.getTime() + SESSION_TTL_DAYS * 24 * 3600 * 1000L));
         editSessionMapper.insert(record);
+
+        EditLeaseService.Lease lease = editLeaseService.tryAcquire(pictureId,
+                EditLeaseService.MODE_AGENT, loginUser.getId(), String.valueOf(record.getId()));
+        if (lease == null) {
+            record.setStatus(PictureEditSessionStatusEnum.CANCELED.getValue());
+            record.setUpdateTime(new Date());
+            editSessionMapper.updateById(record);
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "另一位用户正在编辑该图片，请稍后再试");
+        }
+
+        // 源图上传到 Agent 并创建 Agent 会话；失败则释放租约并作废本地记录
+        try {
+            AgentCallContext context = buildContext(loginUser, picture);
+            String assetId = uploadSourceAsset(picture, context);
+            AgentSessionDetailDTO detail = agentClient.createSession(assetId, null,
+                    picture.getName(), context);
+            ThrowUtils.throwIf(detail == null || detail.getId() == null,
+                    ErrorCode.OPERATION_ERROR, "创建修图会话失败");
+            record.setAgentSessionId(detail.getId());
+            record.setStatus(PictureEditSessionStatusEnum.ACTIVE.getValue());
+            record.setUpdateTime(new Date());
+            editSessionMapper.updateById(record);
+        } catch (RuntimeException e) {
+            editLeaseService.release(pictureId, lease.getLockToken());
+            record.setStatus(PictureEditSessionStatusEnum.CANCELED.getValue());
+            record.setUpdateTime(new Date());
+            editSessionMapper.updateById(record);
+            throw e;
+        }
 
         return rememberIdempotency(record, idempotencyKey, loginUser.getId());
     }
@@ -156,7 +184,35 @@ public class AgentEditSessionService {
         record.setStatus(PictureEditSessionStatusEnum.CANCELED.getValue());
         record.setUpdateTime(new Date());
         editSessionMapper.updateById(record);
+        // 释放统一编辑租约
+        editLeaseService.releaseForSession(record.getPictureId(), EditLeaseService.MODE_AGENT,
+                record.getUserId(), String.valueOf(record.getId()));
         return true;
+    }
+
+    /**
+     * 编辑租约心跳续租（前端每 20 秒调用）
+     */
+    public Boolean heartbeat(Long sessionId, User loginUser) {
+        PictureEditSession record = loadSession(sessionId);
+        checkOwner(record, loginUser);
+        boolean renewed = editLeaseService.renewForSession(record.getPictureId(),
+                EditLeaseService.MODE_AGENT, record.getUserId(), String.valueOf(record.getId()));
+        ThrowUtils.throwIf(!renewed, ErrorCode.OPERATION_ERROR,
+                "编辑租约已失效，请重新进入工作台");
+        return true;
+    }
+
+    /**
+     * 校验当前会话仍持有 Agent 编辑租约；锁丢失后禁止修改，任务结果保留为草稿
+     */
+    private void requireAgentLease(PictureEditSession record) {
+        boolean held = editLeaseService.isHeldBy(record.getPictureId(),
+                EditLeaseService.MODE_AGENT, record.getUserId(), String.valueOf(record.getId()));
+        if (!held) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "编辑租约已失效，结果仅保留为草稿，请重新进入工作台");
+        }
     }
 
     /**
@@ -293,6 +349,7 @@ public class AgentEditSessionService {
         PictureEditRun run = loadRun(runId);
         PictureEditSession record = loadSession(run.getEditSessionId());
         checkOwner(record, loginUser);
+        requireAgentLease(record);
         ThrowUtils.throwIf(!"PLAN".equals(run.getRunType()),
                 ErrorCode.OPERATION_ERROR, "仅多步计划支持确认/取消/重试");
         ThrowUtils.throwIf(run.getAgentRunId() == null, ErrorCode.NOT_FOUND_ERROR, "运行不存在");
@@ -404,6 +461,16 @@ public class AgentEditSessionService {
         vo.setUpdateTime(record.getUpdateTime());
         vo.setExpireTime(record.getExpireTime());
         vo.setReadOnly(readOnly);
+        // 当前编辑租约（不含 lockToken）
+        EditLeaseService.Lease lease = editLeaseService.current(record.getPictureId());
+        if (lease != null) {
+            AgentSessionVO.AgentLeaseVO leaseVO = new AgentSessionVO.AgentLeaseVO();
+            leaseVO.setMode(lease.getMode());
+            leaseVO.setUserId(lease.getUserId());
+            leaseVO.setSessionId(lease.getSessionId());
+            leaseVO.setAcquiredAt(lease.getAcquiredAt());
+            vo.setLease(leaseVO);
+        }
         // 画布快照与最近对话：Agent 不可用时返回数据库骨架
         try {
             AgentCallContext context = buildContext(loginUser, record);
@@ -522,6 +589,7 @@ public class AgentEditSessionService {
         ThrowUtils.throwIf(!PictureEditSessionStatusEnum.ACTIVE.getValue().equals(status)
                         && !PictureEditSessionStatusEnum.READY_TO_COMMIT.getValue().equals(status),
                 ErrorCode.OPERATION_ERROR, "会话不可用（状态：" + status + "）");
+        requireAgentLease(record);
         return record;
     }
 

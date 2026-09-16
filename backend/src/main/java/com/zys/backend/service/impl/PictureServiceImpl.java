@@ -8,6 +8,7 @@ import cn.hutool.core.util.URLUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.zys.backend.api.aliyunai.AliYunAiApi;
@@ -17,6 +18,8 @@ import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.exception.ThrowUtils;
 import com.zys.backend.manager.CosStorageManager;
+import com.zys.backend.manager.PictureVersionManager;
+import com.zys.backend.manager.lease.EditLeaseService;
 import com.zys.backend.manager.vector.VectorClient;
 import com.zys.backend.manager.upload.FilePictureUpload;
 import com.zys.backend.manager.upload.PictureUploadTemplate;
@@ -25,9 +28,11 @@ import com.zys.backend.mapper.PictureMapper;
 import com.zys.backend.model.dto.file.UploadPictureResult;
 import com.zys.backend.model.dto.picture.*;
 import com.zys.backend.model.entity.Picture;
+import com.zys.backend.model.entity.PictureVersion;
 import com.zys.backend.model.entity.Space;
 import com.zys.backend.model.entity.User;
 import com.zys.backend.model.enums.PictureReviewStatusEnum;
+import com.zys.backend.model.enums.PictureVersionSourceEnum;
 import com.zys.backend.model.vo.PictureVO;
 import com.zys.backend.model.vo.UserVO;
 import com.zys.backend.service.PictureService;
@@ -64,6 +69,12 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
 
     @Resource
     private CosStorageManager cosStorageManager;
+
+    @Resource
+    private PictureVersionManager pictureVersionManager;
+
+    @Resource
+    private EditLeaseService editLeaseService;
 
     @Resource
     private UserService userService;
@@ -153,6 +164,8 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         if (pictureId != null){
             oldPicture = this.getById(pictureId);
             ThrowUtils.throwIf(oldPicture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
+            // 统一编辑租约互斥：他人持有 QUICK/AGENT 租约时禁止覆盖
+            editLeaseService.blockIfHeldByOther(pictureId, loginUser.getId());
             // 仅本人或管理员可编辑图片
 //            if (!oldPicture.getUserId().equals(loginUser.getId()) && !userService.isAdmin(loginUser)) {
 //                throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "您没有权限编辑该图片");
@@ -222,10 +235,23 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
 
         // 更新空间统计信息  开启事务
         Long finalSpaceId = spaceId;
+        Long finalPictureId = pictureId;
         transactionTemplate.execute((status) -> {
             // 插入数据
             boolean result = this.saveOrUpdate(picture);
             ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片上传失败，数据库操作失败");
+            // 覆盖原图时记录版本快照并递增乐观锁版本号
+            if (finalPictureId != null) {
+                pictureVersionManager.ensureInitialVersion(oldPicture);
+                long versionNo = pictureVersionManager.nextVersionNo(finalPictureId);
+                PictureVersion version = pictureVersionManager.recordVersion(picture, versionNo,
+                        PictureVersionSourceEnum.QUICK_EDIT, null, null, loginUser.getId());
+                boolean versionUpdated = this.update(new UpdateWrapper<Picture>()
+                        .eq("id", finalPictureId)
+                        .set("currentVersionId", version.getId())
+                        .setSql("editVersion = editVersion + 1"));
+                ThrowUtils.throwIf(!versionUpdated, ErrorCode.OPERATION_ERROR, "图片版本更新失败");
+            }
             // 更新空间统计信息
             if (finalSpaceId != null) {
                 Long oldPictureSize = oldPicture == null ? 0L : oldPicture.getPicSize();
