@@ -9,7 +9,7 @@ from app.eval import evaluate, render
 from app.eval.__main__ import main
 from app.eval.metrics import alpha_iou, contain, mae, passes, psnr, size_score
 from app.eval.tasks import run_task
-from app.storage import _client, signed_url
+from app.storage_s3 import _client, signed_url
 
 
 def _png(image: Image.Image) -> bytes:
