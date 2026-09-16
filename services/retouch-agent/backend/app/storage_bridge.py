@@ -39,7 +39,8 @@ class StorageBridgeError(Exception):
 
 @lru_cache
 def _http() -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0))
+    # trust_env=False：内部服务调用不走系统/环境代理（代理会返回 502 干扰内网请求）
+    return httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0), trust_env=False)
 
 
 def _cache_tick() -> str:
@@ -84,7 +85,7 @@ def ensure_bucket() -> None:
 def _sync_probe() -> None:
     settings = get_settings()
     try:
-        response = httpx.get(f"{settings.gallery_bridge_url}/health", timeout=5.0)
+        response = httpx.get(f"{settings.gallery_bridge_url}/health", timeout=5.0, trust_env=False)
     except httpx.HTTPError as exc:
         raise StorageBridgeError(f"云图库桥接不可达：{exc}") from exc
     if response.status_code != 200:

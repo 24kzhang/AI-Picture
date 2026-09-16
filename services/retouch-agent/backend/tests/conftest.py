@@ -20,7 +20,33 @@ TEST_REDIS_DB = 1
 
 
 @pytest.fixture(scope="session", autouse=True)
-def bucket():
+def hermetic_settings():
+    """测试不依赖本机 .env 的融合作业配置：默认按独立模式 + S3 直连运行。
+
+    需要集成模式或桥接存储的测试自行用 monkeypatch 覆盖。
+    """
+    settings = get_settings()
+    originals = (
+        settings.integration_mode,
+        settings.storage_backend,
+        settings.gallery_bridge_url,
+        settings.gallery_public_url,
+    )
+    settings.integration_mode = False
+    settings.storage_backend = "s3"
+    settings.gallery_bridge_url = ""
+    settings.gallery_public_url = ""
+    yield
+    (
+        settings.integration_mode,
+        settings.storage_backend,
+        settings.gallery_bridge_url,
+        settings.gallery_public_url,
+    ) = originals
+
+
+@pytest.fixture(scope="session", autouse=True)
+def bucket(hermetic_settings):
     ensure_bucket()
 
 

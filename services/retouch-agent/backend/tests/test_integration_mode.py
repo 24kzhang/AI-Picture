@@ -182,6 +182,22 @@ def test_issue_rejects_out_of_range_ttl():
         service_token.issue({"uid": "1"}, SECRET, service_token.GALLERY_AUDIENCE, ttl_seconds=0)
 
 
+async def test_app_starts_when_bridge_unreachable(monkeypatch):
+    """发布顺序容错：云图库网关未就绪时 Agent 仍可启动，状态由健康检查暴露。"""
+    from app.main import app
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "integration_mode", True)
+    monkeypatch.setattr(settings, "service_token_secret", SECRET)
+    # 指向不可达端口，确保探测失败
+    monkeypatch.setattr(settings, "gallery_bridge_url", "http://127.0.0.1:1/api/agent-internal")
+    try:
+        async with app.router.lifespan_context(app):
+            pass
+    finally:
+        settings.integration_mode = False
+
+
 def test_verify_rejects_overlong_ttl():
     body = {
         "uid": "1",
