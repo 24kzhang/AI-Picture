@@ -81,4 +81,31 @@ public final class AgentApiRequests {
 
         private Double y;
     }
+
+    /**
+     * 选定最终草稿
+     */
+    @Data
+    public static class FinalAssetRequest {
+
+        private String assetId;
+    }
+
+    /**
+     * 确认并替换原图
+     */
+    @Data
+    public static class CommitRequest {
+
+        private Long expectedEditVersion;
+    }
+
+    /**
+     * 恢复历史版本
+     */
+    @Data
+    public static class RestoreRequest {
+
+        private Long expectedEditVersion;
+    }
 }

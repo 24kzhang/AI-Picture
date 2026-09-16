@@ -4,8 +4,11 @@ import com.zys.backend.agent.dto.AgentApiRequests;
 import com.zys.backend.agent.dto.AgentSessionDetailDTO;
 import com.zys.backend.agent.vo.AgentSessionVO;
 import com.zys.backend.agent.vo.AgentTurnVO;
+import com.zys.backend.agent.vo.PictureVersionVO;
 import com.zys.backend.common.BaseResponse;
 import com.zys.backend.common.ResultUtils;
+import com.zys.backend.exception.ErrorCode;
+import com.zys.backend.exception.ThrowUtils;
 import com.zys.backend.model.entity.User;
 import com.zys.backend.service.UserService;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -28,6 +32,9 @@ public class AgentSessionController {
 
     @Resource
     private AgentEditSessionService editSessionService;
+
+    @Resource
+    private AgentCommitService commitService;
 
     @Resource
     private UserService userService;
@@ -43,6 +50,60 @@ public class AgentSessionController {
         User loginUser = userService.getLoginUser(request);
         AgentSessionVO vo = editSessionService.createSession(pictureId, idempotencyKey, loginUser);
         return ResultUtils.success(vo);
+    }
+
+    /**
+     * 选定最终草稿，会话进入待提交状态
+     */
+    @PostMapping("/agent-sessions/{sessionId}/final-asset")
+    public BaseResponse<AgentSessionVO> setFinalAsset(
+            @PathVariable("sessionId") long sessionId,
+            @RequestBody AgentApiRequests.FinalAssetRequest finalAssetRequest,
+            HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        ThrowUtils.throwIf(finalAssetRequest == null, ErrorCode.PARAMS_ERROR, "请求体不能为空");
+        return ResultUtils.success(
+                commitService.setFinalAsset(sessionId, finalAssetRequest.getAssetId(), loginUser));
+    }
+
+    /**
+     * 确认并替换原图（显式提交，携带 expectedEditVersion 乐观锁）
+     */
+    @PostMapping("/agent-sessions/{sessionId}/commit")
+    public BaseResponse<PictureVersionVO> commitSession(
+            @PathVariable("sessionId") long sessionId,
+            @RequestBody AgentApiRequests.CommitRequest commitRequest,
+            HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        ThrowUtils.throwIf(commitRequest == null, ErrorCode.PARAMS_ERROR, "请求体不能为空");
+        return ResultUtils.success(
+                commitService.commit(sessionId, commitRequest.getExpectedEditVersion(), loginUser));
+    }
+
+    /**
+     * 图片版本历史
+     */
+    @GetMapping("/picture/{pictureId}/versions")
+    public BaseResponse<List<PictureVersionVO>> listVersions(
+            @PathVariable("pictureId") long pictureId,
+            HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(commitService.listVersions(pictureId, loginUser));
+    }
+
+    /**
+     * 恢复历史版本（创建新版本，不回退版本号）
+     */
+    @PostMapping("/picture/{pictureId}/versions/{versionId}/restore")
+    public BaseResponse<PictureVersionVO> restoreVersion(
+            @PathVariable("pictureId") long pictureId,
+            @PathVariable("versionId") long versionId,
+            @RequestBody AgentApiRequests.RestoreRequest restoreRequest,
+            HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        ThrowUtils.throwIf(restoreRequest == null, ErrorCode.PARAMS_ERROR, "请求体不能为空");
+        return ResultUtils.success(commitService.restoreVersion(
+                pictureId, versionId, restoreRequest.getExpectedEditVersion(), loginUser));
     }
 
     /**
