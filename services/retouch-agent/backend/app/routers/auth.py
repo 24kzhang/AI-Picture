@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.config import get_settings
 from app.db import SessionDep
@@ -8,7 +8,16 @@ from app.schemas.auth import Credentials, UserOut
 from app.security import SESSION_COOKIE, issue_token
 from app.services import auth as auth_service
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+
+def _reject_in_integration_mode() -> None:
+    """集成模式下关闭独立注册、登录等公开用户接口。"""
+    if get_settings().integration_mode:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "集成模式下独立用户接口已关闭")
+
+
+router = APIRouter(
+    prefix="/auth", tags=["auth"], dependencies=[Depends(_reject_in_integration_mode)]
+)
 
 
 def _start_session(response: Response, user: User) -> UserOut:

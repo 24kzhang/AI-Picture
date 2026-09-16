@@ -14,10 +14,6 @@ _WORKING = {AssetKind.MASK, AssetKind.SUBJECT, AssetKind.BACKGROUND}
 ORPHAN_TITLE = "未归入会话"
 
 
-def _storage_key(user_id: uuid.UUID, asset_id: uuid.UUID, extension: str) -> str:
-    return f"users/{user_id}/{asset_id}.{extension}"
-
-
 async def create_from_bytes(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -29,7 +25,7 @@ async def create_from_bytes(
     """校验图片、写入对象存储并落库。所有素材以 user_id 为前缀隔离。"""
     meta = meta or probe(data)
     asset_id = uuid.uuid4()
-    key = _storage_key(user_id, asset_id, meta.extension)
+    key = storage.object_key(user_id, asset_id, meta.extension)
 
     await storage.put(key, data, meta.content_type)
 

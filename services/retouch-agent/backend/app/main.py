@@ -15,6 +15,8 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    if settings.integration_mode and len(settings.service_token_secret) < 32:
+        raise RuntimeError("INTEGRATION_MODE 已开启，但 SERVICE_TOKEN_SECRET 缺失或短于 32 字节")
     await asyncio.to_thread(storage.ensure_bucket)
     yield
     await close_queue()
@@ -40,5 +42,6 @@ app.include_router(api)
 app.include_router(events.router)
 
 # 生产环境下前端与 API 同源，静态产物由本服务托管；开发环境走 Vite dev proxy。
-if settings.frontend_dist.is_dir():
+# 集成模式下云图库 Vue 前端是唯一入口，不再托管本服务 React 前端。
+if not settings.integration_mode and settings.frontend_dist.is_dir():
     app.mount("/", StaticFiles(directory=settings.frontend_dist, html=True), name="frontend")
