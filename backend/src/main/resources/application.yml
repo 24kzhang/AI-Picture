@@ -73,6 +73,11 @@ gallery:
     token-secret: ${AGENT_SERVICE_SECRET:}
     connect-timeout-ms: ${AGENT_CONNECT_TIMEOUT_MS:5000}
     read-timeout-ms: ${AGENT_READ_TIMEOUT_MS:60000}
+    outbox:
+      # 集成事务 Outbox 分发开关与轮询间隔
+      enabled: ${AGENT_OUTBOX_ENABLED:true}
+      poll-interval-ms: ${AGENT_OUTBOX_POLL_INTERVAL_MS:5000}
+      initial-delay-ms: ${AGENT_OUTBOX_INITIAL_DELAY_MS:15000}
 
 cos:
   client:
