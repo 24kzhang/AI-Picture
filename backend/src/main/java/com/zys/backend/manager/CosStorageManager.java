@@ -6,8 +6,10 @@ import com.qcloud.cos.COSClient;
 import com.qcloud.cos.ClientConfig;
 import com.qcloud.cos.auth.BasicCOSCredentials;
 import com.qcloud.cos.auth.COSCredentials;
+import com.qcloud.cos.http.HttpMethodName;
 import com.qcloud.cos.http.HttpProtocol;
 import com.qcloud.cos.model.COSObject;
+import com.qcloud.cos.model.GeneratePresignedUrlRequest;
 import com.qcloud.cos.model.GetObjectRequest;
 import com.qcloud.cos.model.ObjectMetadata;
 import com.qcloud.cos.model.PutObjectRequest;
@@ -17,6 +19,7 @@ import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.model.dto.file.UploadPictureResult;
 import com.zys.backend.service.SystemSettingsService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
@@ -35,6 +38,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.UUID;
@@ -189,6 +193,123 @@ public class CosStorageManager {
         } catch (Exception e) {
             log.warn("腾讯云 COS 连通性检查失败：{}", e.getMessage());
             return false;
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+    }
+
+    /**
+     * 生成预签名下载 URL（GET）
+     */
+    public String presignedGetUrl(String key, int ttlSeconds) {
+        Settings settings = readSettings();
+        COSClient client = null;
+        try {
+            client = createClient(settings);
+            GeneratePresignedUrlRequest request =
+                    new GeneratePresignedUrlRequest(settings.bucket, key, HttpMethodName.GET);
+            request.setExpiration(new Date(System.currentTimeMillis() + ttlSeconds * 1000L));
+            return client.generatePresignedUrl(request).toString();
+        } catch (Exception e) {
+            log.error("生成 COS 预签名下载 URL 失败，key={}", key, e);
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "生成下载链接失败");
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+    }
+
+    /**
+     * 生成预签名上传 URL（PUT）
+     */
+    public String presignedPutUrl(String key, String contentType, int ttlSeconds) {
+        Settings settings = readSettings();
+        COSClient client = null;
+        try {
+            client = createClient(settings);
+            GeneratePresignedUrlRequest request =
+                    new GeneratePresignedUrlRequest(settings.bucket, key, HttpMethodName.PUT);
+            request.setExpiration(new Date(System.currentTimeMillis() + ttlSeconds * 1000L));
+            if (StrUtil.isNotBlank(contentType)) {
+                request.putCustomRequestHeader(HttpHeaders.CONTENT_TYPE, contentType);
+            }
+            return client.generatePresignedUrl(request).toString();
+        } catch (Exception e) {
+            log.error("生成 COS 预签名上传 URL 失败，key={}", key, e);
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "生成上传链接失败");
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+    }
+
+    /**
+     * 校验对象键前缀并返回规范化后的键；不合法直接抛业务异常
+     */
+    public String validateKeyPrefix(String key, String allowedPrefix) {
+        if (StrUtil.isBlank(key) || !key.startsWith(allowedPrefix) || key.contains("..")) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "COS 对象键前缀不合法");
+        }
+        return key;
+    }
+
+    /**
+     * 判断对象是否存在
+     */
+    public boolean doesObjectExist(String key) {
+        Settings settings = readSettings();
+        COSClient client = null;
+        try {
+            client = createClient(settings);
+            return client.doesObjectExist(settings.bucket, key);
+        } catch (Exception e) {
+            log.warn("查询 COS 对象存在性失败，key={}", key, e);
+            return false;
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+    }
+
+    /**
+     * 获取对象元数据（大小、类型）；对象不存在返回 null
+     */
+    public ObjectMetadata statObject(String key) {
+        Settings settings = readSettings();
+        COSClient client = null;
+        try {
+            client = createClient(settings);
+            return client.getObjectMetadata(settings.bucket, key);
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+    }
+
+    /**
+     * 删除对象（尽力而为，失败仅告警）
+     */
+    public void deleteKeyQuietly(String key) {
+        Settings settings;
+        try {
+            settings = readSettings();
+        } catch (BusinessException e) {
+            return;
+        }
+        COSClient client = null;
+        try {
+            client = createClient(settings);
+            client.deleteObject(settings.bucket, key);
+        } catch (Exception e) {
+            log.warn("删除 COS 对象失败，key={}", key, e);
         } finally {
             if (client != null) {
                 client.shutdown();
