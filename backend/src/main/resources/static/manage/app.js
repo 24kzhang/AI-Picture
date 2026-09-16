@@ -13,9 +13,16 @@
     pageSize: 20,
     total: 0,
     rowMode: 'insert',
+    rowEditorMode: 'form',
     editingPrimaryKey: {},
     dedupe: null,
   }
+
+  const INTEGER_TYPES = ['TINYINT', 'SMALLINT', 'MEDIUMINT', 'INT', 'INTEGER', 'BIGINT', 'YEAR']
+  const DECIMAL_TYPES = ['DECIMAL', 'NUMERIC', 'FLOAT', 'DOUBLE', 'REAL']
+  const LONG_TEXT_TYPES = ['TEXT', 'TINYTEXT', 'MEDIUMTEXT', 'LONGTEXT', 'JSON']
+  const BINARY_TYPES = ['BINARY', 'VARBINARY', 'BLOB', 'TINYBLOB', 'MEDIUMBLOB', 'LONGBLOB']
+  const DATETIME_TYPES = ['DATETIME', 'TIMESTAMP']
 
   const $ = (selector, root = document) => root.querySelector(selector)
   const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector))
@@ -244,25 +251,327 @@
     renderDatabase()
   }
 
+  function columnCategory(column) {
+    const type = String(column.type || '').toUpperCase()
+    if (INTEGER_TYPES.includes(type)) return 'integer'
+    if (DECIMAL_TYPES.includes(type)) return 'decimal'
+    if (DATETIME_TYPES.includes(type)) return 'datetime'
+    if (type === 'DATE') return 'date'
+    if (type === 'TIME') return 'time'
+    if (type === 'BOOLEAN' || type === 'BOOL' || type === 'BIT') return 'boolean'
+    if (LONG_TEXT_TYPES.includes(type)) return 'longtext'
+    if (BINARY_TYPES.includes(type)) return 'binary'
+    return 'text'
+  }
+
+  function columnHasDefault(column) {
+    return column.defaultValue !== null && column.defaultValue !== undefined && column.defaultValue !== ''
+  }
+
+  function inputValueFor(column, value) {
+    if (value === null || value === undefined) return ''
+    const text = String(value)
+    const category = columnCategory(column)
+    if (category === 'datetime') {
+      const match = text.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?)/)
+      return match ? `${match[1]}T${match[2]}` : text
+    }
+    if (category === 'date') {
+      const match = text.match(/\d{4}-\d{2}-\d{2}/)
+      return match ? match[0] : text
+    }
+    if (category === 'time') {
+      const match = text.match(/\d{1,2}:\d{2}(?::\d{2})?/)
+      return match ? match[0] : text
+    }
+    if (category === 'boolean') {
+      if (text === 'true' || text === '1') return '1'
+      if (text === 'false' || text === '0') return '0'
+    }
+    if (category === 'binary') {
+      return text.replace(/^\[二进制 \d+ 字节\]\s*/, '')
+    }
+    return text
+  }
+
+  function createControl(column, category, value) {
+    let control
+    if (category === 'longtext' || category === 'binary') {
+      control = document.createElement('textarea')
+      control.rows = category === 'binary' ? 2 : 3
+      if (category === 'binary') {
+        control.title = '二进制字段只读展示，需要修改请切换到 JSON 高级模式'
+      }
+    } else if (category === 'boolean') {
+      control = document.createElement('select')
+      control.add(new Option('true', '1'))
+      control.add(new Option('false', '0'))
+    } else {
+      control = document.createElement('input')
+      if (category === 'date') control.type = 'date'
+      else if (category === 'time') { control.type = 'time'; control.step = '1' }
+      else if (category === 'datetime') { control.type = 'datetime-local'; control.step = '1' }
+      else {
+        control.type = 'text'
+        if (category === 'integer') control.inputMode = 'numeric'
+        else if (category === 'decimal') control.inputMode = 'decimal'
+        else if (column.size && Number(column.size) > 0) control.maxLength = Number(column.size)
+      }
+    }
+    control.value = value
+    return control
+  }
+
+  function updateControlDisabled(field, column) {
+    const control = $('[data-control]', field)
+    const nullBox = $('input[data-null]', field)
+    const lockedByMode = state.rowMode === 'edit' && column.primaryKey
+    const lockedByAuto = column.autoIncrement && state.rowMode === 'insert'
+    const lockedByType = columnCategory(column) === 'binary'
+    const lockedByNull = Boolean(nullBox && nullBox.checked)
+    control.disabled = lockedByMode || lockedByAuto || lockedByType || lockedByNull
+  }
+
+  function renderRowForm(mode, row) {
+    const container = $('#row-fields')
+    container.replaceChildren()
+    $('#form-tip').textContent = mode === 'insert'
+      ? '按字段填写即可；程序会自动校验类型、必填项与长度。留空且有默认值的字段将使用数据库默认值。'
+      : '修改需要更新的字段即可；程序会自动校验类型、必填项与长度。主键只读。'
+    state.columns.forEach((column) => {
+      const category = columnCategory(column)
+      const value = row[column.name]
+      const field = document.createElement('div')
+      field.className = 'row-field'
+      field.dataset.column = column.name
+
+      const head = document.createElement('div')
+      head.className = 'row-field-head'
+      const label = document.createElement('label')
+      label.className = 'row-field-label'
+      const typeText = String(column.type || '') + (column.size ? `(${column.size})` : '')
+      const traits = [typeText]
+      if (column.primaryKey) traits.push('主键')
+      if (column.autoIncrement) traits.push('自增')
+      if (!column.nullable) traits.push('非空')
+      if (columnHasDefault(column)) traits.push('默认 ' + column.defaultValue)
+      label.append(cell('span', column.name, 'row-field-name'), cell('span', traits.join(' · '), 'row-field-type'))
+      head.append(label)
+
+      if (column.nullable) {
+        const nullToggle = document.createElement('label')
+        nullToggle.className = 'null-toggle'
+        const box = document.createElement('input')
+        box.type = 'checkbox'
+        box.dataset.null = 'true'
+        box.checked = mode === 'insert'
+          ? !columnHasDefault(column)
+          : (value === null || value === undefined)
+        nullToggle.append(box, document.createTextNode(' NULL'))
+        head.append(nullToggle)
+      }
+      field.append(head)
+
+      const controlWrap = document.createElement('div')
+      controlWrap.className = 'row-field-control'
+      const control = createControl(column, category, inputValueFor(column, value))
+      control.dataset.control = 'true'
+      controlWrap.append(control)
+      field.append(controlWrap)
+
+      const error = cell('p', '', 'row-field-error')
+      error.dataset.error = 'true'
+      error.hidden = true
+      field.append(error)
+
+      const nullBox = $('input[data-null]', field)
+      if (nullBox) nullBox.addEventListener('change', () => updateControlDisabled(field, column))
+      updateControlDisabled(field, column)
+      container.append(field)
+    })
+    state.rowEditorMode = 'form'
+    $$('.mode-button').forEach((button) => button.classList.toggle('active', button.dataset.mode === 'form'))
+    $('#form-tip').hidden = false
+    $('#row-fields').hidden = false
+    $('#row-json-wrap').hidden = true
+  }
+
   function openRowDialog(mode, row = {}) {
     state.rowMode = mode
     state.editingPrimaryKey = Object.fromEntries(state.primaryKeys.map((key) => [key, row[key]]))
-    const values = mode === 'insert'
-      ? Object.fromEntries(state.columns.filter((column) => !column.autoIncrement).map((column) => [column.name, null]))
-      : Object.fromEntries(state.columns.map((column) => [column.name, row[column.name]]))
     $('#row-dialog-title').textContent = mode === 'insert' ? `新增 ${state.selectedTable} 记录` : `编辑 ${state.selectedTable} 记录`
-    $('#row-json').value = JSON.stringify(values, null, 2)
+    renderRowForm(mode, row)
     $('#row-dialog').showModal()
+  }
+
+  function snapshotForm() {
+    const values = {}
+    $$('.row-field', $('#row-fields')).forEach((field) => {
+      const column = state.columns.find((item) => item.name === field.dataset.column)
+      if (!column) return
+      const control = $('[data-control]', field)
+      const nullBox = $('input[data-null]', field)
+      if (nullBox && nullBox.checked) {
+        values[column.name] = null
+        return
+      }
+      const raw = control.value
+      if (column.autoIncrement && state.rowMode === 'insert' && raw === '') return
+      values[column.name] = raw === '' ? null : raw
+    })
+    return values
+  }
+
+  function applyValues(values) {
+    $$('.row-field', $('#row-fields')).forEach((field) => {
+      const column = state.columns.find((item) => item.name === field.dataset.column)
+      if (!column) return
+      const control = $('[data-control]', field)
+      const nullBox = $('input[data-null]', field)
+      const has = Object.prototype.hasOwnProperty.call(values, column.name)
+      const value = has ? values[column.name] : undefined
+      const isNull = has && value === null
+      control.value = inputValueFor(column, isNull ? null : value)
+      if (nullBox) nullBox.checked = isNull
+      updateControlDisabled(field, column)
+    })
+  }
+
+  function switchEditorMode(mode) {
+    if (mode === state.rowEditorMode) return
+    if (mode === 'json') {
+      $('#row-json').value = JSON.stringify(snapshotForm(), null, 2)
+      $('#form-tip').hidden = true
+      $('#row-fields').hidden = true
+      $('#row-json-wrap').hidden = false
+    } else {
+      let parsed
+      try {
+        parsed = JSON.parse($('#row-json').value)
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('必须是 JSON 对象')
+      } catch (error) {
+        toast('JSON 格式错误，无法切换回表单：' + error.message, true)
+        return
+      }
+      applyValues(parsed)
+      $('#form-tip').hidden = false
+      $('#row-fields').hidden = false
+      $('#row-json-wrap').hidden = true
+    }
+    state.rowEditorMode = mode
+    $$('.mode-button').forEach((button) => button.classList.toggle('active', button.dataset.mode === mode))
+  }
+
+  function reportFieldError(field, message, firstError) {
+    const error = $('[data-error]', field)
+    error.textContent = message
+    error.hidden = false
+    field.classList.add('has-error')
+    if (!firstError) {
+      field.scrollIntoView({ block: 'nearest' })
+      return message
+    }
+    return firstError
+  }
+
+  function parseFieldValue(column, category, raw) {
+    const text = raw.trim()
+    if (category === 'binary') return { error: `${column.name} 为二进制字段，请使用 JSON 高级模式` }
+    if (category === 'integer') {
+      return /^-?\d+$/.test(text) ? { value: text } : { error: `${column.name} 必须是整数` }
+    }
+    if (category === 'decimal') {
+      return /^-?\d+(\.\d+)?$/.test(text) ? { value: text } : { error: `${column.name} 必须是数字` }
+    }
+    if (category === 'boolean') {
+      return { value: text === '1' || text.toLowerCase() === 'true' ? '1' : '0' }
+    }
+    if (category === 'date') {
+      return /^\d{4}-\d{2}-\d{2}$/.test(text) ? { value: text } : { error: `${column.name} 日期格式应为 YYYY-MM-DD` }
+    }
+    if (category === 'time') {
+      return /^\d{1,2}:\d{2}(:\d{2})?$/.test(text) ? { value: text } : { error: `${column.name} 时间格式应为 HH:MM:SS` }
+    }
+    if (category === 'datetime') {
+      const normalized = text.replace(' ', 'T')
+      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$/.test(normalized)
+        ? { value: normalized.replace('T', ' ') }
+        : { error: `${column.name} 时间格式应为 YYYY-MM-DD HH:MM:SS` }
+    }
+    if (column.size && Number(column.size) > 0 && Number(column.size) <= 65535 && raw.length > Number(column.size)) {
+      return { error: `${column.name} 长度不能超过 ${column.size}` }
+    }
+    return { value: raw }
+  }
+
+  function collectFormValues() {
+    const values = {}
+    let firstError = null
+    $$('.row-field', $('#row-fields')).forEach((field) => {
+      const column = state.columns.find((item) => item.name === field.dataset.column)
+      const control = $('[data-control]', field)
+      const errorEl = $('[data-error]', field)
+      errorEl.hidden = true
+      errorEl.textContent = ''
+      field.classList.remove('has-error')
+      if (!column) return
+      const category = columnCategory(column)
+      const nullBox = $('input[data-null]', field)
+      const isNull = Boolean(nullBox && nullBox.checked)
+      const raw = control.value
+
+      if (isNull) {
+        values[column.name] = null
+        return
+      }
+      if (category === 'binary') return
+      if (column.autoIncrement && state.rowMode === 'insert' && raw === '') return
+      if (raw === '') {
+        if (state.rowMode === 'insert') {
+          if (columnHasDefault(column)) return
+          if (column.nullable) return
+          firstError = reportFieldError(field, `${column.name} 为必填字段`, firstError)
+          return
+        }
+        if (category === 'text' || category === 'longtext') {
+          values[column.name] = ''
+          return
+        }
+        if (!column.nullable) {
+          firstError = reportFieldError(field, `${column.name} 为必填字段`, firstError)
+        } else {
+          firstError = reportFieldError(field, `${column.name} 请填写内容或勾选 NULL`, firstError)
+        }
+        return
+      }
+      const parsed = parseFieldValue(column, category, raw)
+      if (parsed.error) {
+        firstError = reportFieldError(field, parsed.error, firstError)
+        return
+      }
+      values[column.name] = parsed.value
+    })
+    if (firstError) throw new Error(firstError)
+    return values
   }
 
   async function saveRow() {
     let values
-    try {
-      values = JSON.parse($('#row-json').value)
-      if (!values || Array.isArray(values) || typeof values !== 'object') throw new Error('必须是 JSON 对象')
-    } catch (error) {
-      toast('JSON 格式错误：' + error.message, true)
-      return
+    if (state.rowEditorMode === 'form') {
+      try {
+        values = collectFormValues()
+      } catch (error) {
+        toast('请检查表单：' + error.message, true)
+        return
+      }
+    } else {
+      try {
+        values = JSON.parse($('#row-json').value)
+        if (!values || Array.isArray(values) || typeof values !== 'object') throw new Error('必须是 JSON 对象')
+      } catch (error) {
+        toast('JSON 格式错误：' + error.message, true)
+        return
+      }
     }
     const path = state.rowMode === 'insert' ? '/database/row/insert' : '/database/row/update'
     const payload = { table: state.selectedTable, values }
@@ -483,6 +792,7 @@
     })
     $('#insert-row').addEventListener('click', () => openRowDialog('insert'))
     $('#save-row').addEventListener('click', saveRow)
+    $$('.mode-button').forEach((button) => button.addEventListener('click', () => switchEditorMode(button.dataset.mode)))
     $('#previous-page').addEventListener('click', async () => { state.page -= 1; await loadRows() })
     $('#next-page').addEventListener('click', async () => { state.page += 1; await loadRows() })
     $('#search-redis').addEventListener('click', async () => {

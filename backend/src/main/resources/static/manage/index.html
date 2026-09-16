@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light">
   <title>云图库 · 本机控制台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%231748d1'/%3E%3Ctext x='10' y='43' font-size='29' fill='white'%3ECG%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="./app.css">
+  <link rel="stylesheet" href="./app.css?v=2">
 </head>
 <body>
   <div class="shell">
@@ -128,7 +128,7 @@
       <section class="panel" data-panel="database">
         <div class="section-heading">
           <div><span class="section-number">02</span><h2>数据库表数据</h2></div>
-          <p>支持分页浏览、新增、JSON 编辑和物理删除。</p>
+          <p>支持分页浏览、表单化新增与编辑（自动类型校验）、JSON 高级模式和物理删除。</p>
         </div>
         <div class="tool-row">
           <label class="compact-field"><span>数据表</span><select id="table-select"><option value="">选择数据表</option></select></label>
@@ -192,8 +192,16 @@
   <dialog id="row-dialog" class="modal">
     <form method="dialog" class="modal-card" id="row-form">
       <header><div><small>DATABASE RECORD</small><h3 id="row-dialog-title">新增数据库记录</h3></div><button class="icon-button" value="cancel" aria-label="关闭">×</button></header>
-      <p class="modal-tip">使用 JSON 对象编辑字段。删除不需要写入的字段，使用 null 写入数据库 NULL。</p>
-      <textarea id="row-json" rows="18" spellcheck="false"></textarea>
+      <div class="mode-switch" role="tablist" aria-label="编辑模式">
+        <button type="button" class="mode-button active" data-mode="form">表单模式</button>
+        <button type="button" class="mode-button" data-mode="json">JSON 高级模式</button>
+      </div>
+      <p class="modal-tip" id="form-tip">按字段填写即可，程序会自动校验类型、必填项与长度；勾选“NULL”写入数据库空值。</p>
+      <div class="row-fields" id="row-fields"></div>
+      <div id="row-json-wrap" hidden>
+        <p class="modal-tip">使用 JSON 对象编辑字段。删除不需要写入的字段，使用 null 写入数据库 NULL。</p>
+        <textarea id="row-json" rows="18" spellcheck="false"></textarea>
+      </div>
       <footer><button class="button ghost" value="cancel">取消</button><button class="button accent" type="button" id="save-row">保存记录</button></footer>
     </form>
   </dialog>
@@ -209,6 +217,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="./app.js" defer></script>
+  <script src="./app.js?v=2" defer></script>
 </body>
 </html>
