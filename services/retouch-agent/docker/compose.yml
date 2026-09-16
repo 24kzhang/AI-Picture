@@ -1,4 +1,9 @@
-name: ai-retouch-agent
+# 修图 Agent 开发环境编排（云图库融合版）
+# 用法：docker compose -f services/retouch-agent/docker/compose.yml up -d --wait
+# 说明：仅提供基础设施（PostgreSQL / Redis / RustFS），API 与 Worker 默认在宿主机运行以便热重载；
+#       需要容器化运行时使用 deploy profile。
+
+name: cloud-gallery-agent
 
 services:
   postgres:
@@ -31,7 +36,7 @@ services:
       timeout: 3s
       retries: 10
 
-  # S3 兼容对象存储（RustFS，MinIO 开源版已归档，配置兼容）
+  # S3 兼容对象存储：COS 适配（AGT-02）完成前的开发存储
   rustfs:
     image: rustfs/rustfs:latest
     restart: unless-stopped
@@ -43,24 +48,25 @@ services:
       RUSTFS_ACCESS_KEY: retouch
       RUSTFS_SECRET_KEY: retouch_dev
     volumes:
-      # Windows 本地目录：D:\learning_files\修图Agent\object-storage
-      - ../object-storage:/data
+      - rustfs_data:/data
     healthcheck:
       test: ["CMD-SHELL", "curl -s -o /dev/null http://localhost:9000/ || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  # 以下两个仅在部署时启用：docker compose --profile deploy up -d
-  app:
+  # 容器化运行 Agent（可选）：docker compose --profile deploy up -d
+  agent-api:
     profiles: ["deploy"]
-    build: .
+    build:
+      context: ..
+      dockerfile: Dockerfile
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 7302
     ports:
       - "7302:7302"
-    env_file: .env
     environment:
+      APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://retouch:retouch_dev@postgres:5432/retouch
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://rustfs:9000
@@ -72,13 +78,15 @@ services:
       redis: { condition: service_healthy }
       rustfs: { condition: service_healthy }
 
-  worker:
+  agent-worker:
     profiles: ["deploy"]
-    build: .
+    build:
+      context: ..
+      dockerfile: Dockerfile
     restart: unless-stopped
     command: arq app.worker.WorkerSettings
-    env_file: .env
     environment:
+      APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://retouch:retouch_dev@postgres:5432/retouch
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://rustfs:9000
@@ -93,4 +101,5 @@ services:
 volumes:
   pg_data:
   redis_data:
+  rustfs_data:
   cv_models:

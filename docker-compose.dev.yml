@@ -1,0 +1,39 @@
+# AI 协同云图库 · 统一开发环境编排
+# 用法：
+#   docker compose -f docker-compose.dev.yml up -d --wait          # 启动全部基础设施（不含 MySQL）
+#   docker compose -f docker-compose.dev.yml --profile gallery up -d --wait   # 连 MySQL 一起启动
+# 说明：
+#   - MySQL 默认使用宿主机实例（localhost:3306）；本机没有 MySQL 时启用 gallery profile。
+#   - 云图库 Redis 复用宿主机实例（localhost:6379，db 1）；Agent 使用独立 Redis（localhost:7312）。
+#   - Agent 的 PostgreSQL / Redis / RustFS 编排见 services/retouch-agent/docker/compose.yml（include 引入）。
+
+name: cloud-gallery-dev
+
+include:
+  - path: services/retouch-agent/docker/compose.yml
+
+services:
+  mysql:
+    profiles: ["gallery"]
+    image: mysql:8.0
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: cloud_gallery
+      MYSQL_CHARSET: utf8mb4
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/sql/create_table.sql:/docker-entrypoint-initdb.d/01_create_table.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -p${MYSQL_ROOT_PASSWORD:-root} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  mysql_data:

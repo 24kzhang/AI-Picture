@@ -1,5 +1,6 @@
 param(
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$NoAgent
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +56,15 @@ if ($backend) { $processes += $backend }
 
 $frontend = Start-GalleryProcess -Name 'frontend' -Port 5173 -ScriptPath (Join-Path $PSScriptRoot 'start-frontend.ps1')
 if ($frontend) { $processes += $frontend }
+
+# Agent 修图服务：失败仅告警，不阻断云图库主体（可 -NoAgent 跳过）
+if (-not $NoAgent) {
+    try {
+        & (Join-Path $PSScriptRoot 'start-agent.ps1')
+    } catch {
+        Write-Host "修图 Agent 启动失败（云图库主体不受影响）：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
 
 if ($processes.Count -gt 0) {
     $processes | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $dataRoot 'processes.json') -Encoding utf8
