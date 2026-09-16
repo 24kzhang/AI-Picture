@@ -65,6 +65,14 @@ gallery:
     service-url: ${VECTOR_SERVICE_URL:http://127.0.0.1:18001}
     connect-timeout-ms: ${VECTOR_CONNECT_TIMEOUT_MS:5000}
     read-timeout-ms: ${VECTOR_READ_TIMEOUT_MS:120000}
+  retouch:
+    # Agent 智能精修总开关；关闭后图库主体与快捷编辑不受影响
+    enabled: ${AGENT_EDIT_ENABLED:true}
+    service-url: ${AGENT_SERVICE_URL:http://127.0.0.1:7302}
+    # 与 Agent 侧共享的 HMAC 服务令牌密钥（不少于 32 字节）
+    token-secret: ${AGENT_SERVICE_SECRET:}
+    connect-timeout-ms: ${AGENT_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${AGENT_READ_TIMEOUT_MS:60000}
 
 cos:
   client:
