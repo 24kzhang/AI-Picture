@@ -96,6 +96,9 @@ public class AgentCommitService {
     @Resource
     private TransactionTemplate transactionTemplate;
 
+    @org.springframework.beans.factory.annotation.Value("${gallery.retouch.token-secret:}")
+    private String retouchTokenSecret;
+
     /**
      * 校验当前会话仍持有 Agent 编辑租约；锁丢失后禁止提交，任务结果保留为草稿
      */
@@ -344,7 +347,7 @@ public class AgentCommitService {
                                                             long versionNo) {
         Path tempFile = null;
         try {
-            tempFile = downloadToTemp(assetUrl);
+            tempFile = downloadToTemp(resolveServerSideUrl(assetUrl));
             String prefix = String.format("pictures/%s/%d/versions/%d",
                     picture.getSpaceId() == null ? "public" : String.valueOf(picture.getSpaceId()),
                     picture.getId(), versionNo);
@@ -357,6 +360,32 @@ public class AgentCommitService {
                 }
             }
         }
+    }
+
+    /**
+     * 解析服务端可用的下载地址。
+     * Agent 素材 URL 是浏览器用的访问令牌链接（需登录），服务端自调用会被拒；
+     * 这里直接解析令牌取对象键，换成 COS 预签名 URL 下载。
+     */
+    private String resolveServerSideUrl(String assetUrl) {
+        if (assetUrl == null) {
+            return null;
+        }
+        String marker = "/api/agent-asset/";
+        int index = assetUrl.indexOf(marker);
+        if (index < 0) {
+            return assetUrl;
+        }
+        String token = assetUrl.substring(index + marker.length());
+        int query = token.indexOf('?');
+        if (query > 0) {
+            token = token.substring(0, query);
+        }
+        String objectKey = AgentServiceTokenVerifier.readAssetToken(token, retouchTokenSecret);
+        if (objectKey == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "修图素材链接无效或已过期");
+        }
+        return cosStorageManager.presignedGetUrl(objectKey, 300);
     }
 
     private Path downloadToTemp(String assetUrl) {

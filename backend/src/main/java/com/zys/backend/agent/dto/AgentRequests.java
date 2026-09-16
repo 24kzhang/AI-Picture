@@ -6,6 +6,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 
 /**
@@ -27,12 +29,12 @@ public final class AgentRequests {
 
         private String currentAssetId;
 
-        private List<String> assetIds;
+        private List<String> assetIds = new ArrayList<>();
 
         private String title;
 
         public SessionCreate(String currentAssetId) {
-            this(currentAssetId, null, null);
+            this(currentAssetId, new ArrayList<>(), null);
         }
     }
 
@@ -46,7 +48,7 @@ public final class AgentRequests {
 
         private String tool;
 
-        private Object params;
+        private Object params = new LinkedHashMap<>();
     }
 
     /**
@@ -82,12 +84,12 @@ public final class AgentRequests {
 
         private Integer revision;
 
-        private List<Point> points;
+        private List<Point> points = new ArrayList<>();
 
-        private List<List<Point>> strokes;
+        private List<List<Point>> strokes = new ArrayList<>();
 
-        private Double radius;
+        private Double radius = 0.03;
 
-        private Boolean append;
+        private Boolean append = false;
     }
 }

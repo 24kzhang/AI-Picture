@@ -120,7 +120,9 @@ public class RetouchAgentClient {
     public AgentSessionDetailDTO createSession(String currentAssetId, List<String> wallAssetIds,
                                                 String title, AgentCallContext context) {
         AgentRequests.SessionCreate payload = new AgentRequests.SessionCreate(
-                currentAssetId, wallAssetIds, title);
+                currentAssetId,
+                wallAssetIds == null ? Collections.emptyList() : wallAssetIds,
+                title);
         return post("/api/sessions", payload, AgentSessionDetailDTO.class, context);
     }
 

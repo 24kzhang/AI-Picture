@@ -1,6 +1,8 @@
 package com.zys.backend.agent;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.PropertyNamingStrategies;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import com.zys.backend.common.BaseResponse;
 import com.zys.backend.common.ResultUtils;
 import com.zys.backend.exception.BusinessException;
@@ -185,7 +187,11 @@ public class AgentStorageBridgeController {
         }
     }
 
+    /**
+     * 桥接请求体统一使用 snake_case（与 Agent 端 pydantic 模型一致）
+     */
     @Data
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public static class UploadRequest {
 
         private String objectKey;
@@ -196,12 +202,14 @@ public class AgentStorageBridgeController {
     }
 
     @Data
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public static class DownloadRequest {
 
         private String objectKey;
     }
 
     @Data
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public static class RegisterRequest {
 
         private String objectKey;
@@ -214,6 +222,7 @@ public class AgentStorageBridgeController {
     }
 
     @Data
+    @JsonNaming(PropertyNamingStrategies.SnakeCaseStrategy.class)
     public static class CleanupRequest {
 
         private java.util.List<String> objectKeys;

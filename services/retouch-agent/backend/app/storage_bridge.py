@@ -67,7 +67,23 @@ async def _post(path: str, payload: dict) -> dict:
         raise StorageBridgeError(f"云图库桥接不可达：{exc}") from exc
     if response.status_code != 200:
         raise StorageBridgeError(f"云图库桥接返回 {response.status_code}: {response.text[:200]}")
-    return response.json()
+    return _unwrap(response)
+
+
+def _unwrap(response: httpx.Response) -> dict:
+    """兼容云图库统一响应信封 {code,data,message}，同时识别业务错误码。"""
+    try:
+        body = response.json()
+    except ValueError:
+        raise StorageBridgeError(f"云图库桥接响应不是 JSON：{response.text[:200]}") from None
+    if not isinstance(body, dict):
+        raise StorageBridgeError("云图库桥接响应格式不正确")
+    if "code" in body and body.get("code") != 0:
+        raise StorageBridgeError(f"云图库桥接拒绝：{body.get('message')}")
+    data = body.get("data")
+    if isinstance(data, dict):
+        return data
+    return body
 
 
 def object_key(user_id: uuid.UUID, asset_id: uuid.UUID, extension: str) -> str:

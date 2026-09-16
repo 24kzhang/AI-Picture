@@ -85,13 +85,15 @@ public class AgentEditSessionService {
         ThrowUtils.throwIf(!agentClient.isEnabled(), ErrorCode.OPERATION_ERROR, "Agent 智能精修未开启");
         Picture picture = permissionChecker.checkPictureEditable(loginUser, pictureId);
 
-        // 幂等键优先：同一键直接返回首次创建结果
+        // 幂等键优先：同一键直接返回首次创建结果（并重取租约，保证可直接继续编辑）
         String idemValue = null;
         if (idempotencyKey != null && !idempotencyKey.trim().isEmpty()) {
             idemValue = stringRedisTemplate.opsForValue().get(idempotencyKeyOf(loginUser.getId(), idempotencyKey));
             if (idemValue != null) {
                 PictureEditSession existing = editSessionMapper.selectById(Long.parseLong(idemValue));
                 if (existing != null) {
+                    editLeaseService.tryAcquire(pictureId, EditLeaseService.MODE_AGENT,
+                            loginUser.getId(), String.valueOf(existing.getId()));
                     return buildSessionVO(existing, loginUser, false);
                 }
             }
@@ -639,20 +641,16 @@ public class AgentEditSessionService {
     private AgentRequests.Select toSelectRequest(AgentApiRequests.SelectionRequest request) {
         AgentRequests.Select select = new AgentRequests.Select();
         select.setRevision(request.getRevision());
-        if (request.getPoints() != null) {
-            select.setPoints(request.getPoints().stream()
-                    .map(p -> new AgentRequests.Point(p.getX(), p.getY()))
-                    .collect(Collectors.toList()));
-        }
-        if (request.getStrokes() != null) {
-            select.setStrokes(request.getStrokes().stream()
-                    .map(stroke -> stroke.stream()
-                            .map(p -> new AgentRequests.Point(p.getX(), p.getY()))
-                            .collect(Collectors.toList()))
-                    .collect(Collectors.toList()));
-        }
-        select.setRadius(request.getRadius());
-        select.setAppend(request.getAppend());
+        select.setPoints(request.getPoints() == null ? new ArrayList<>() : request.getPoints().stream()
+                .map(p -> new AgentRequests.Point(p.getX(), p.getY()))
+                .collect(Collectors.toList()));
+        select.setStrokes(request.getStrokes() == null ? new ArrayList<>() : request.getStrokes().stream()
+                .map(stroke -> stroke.stream()
+                        .map(p -> new AgentRequests.Point(p.getX(), p.getY()))
+                        .collect(Collectors.toList()))
+                .collect(Collectors.toList()));
+        select.setRadius(request.getRadius() == null ? 0.03 : request.getRadius());
+        select.setAppend(request.getAppend() != null && request.getAppend());
         return select;
     }
 

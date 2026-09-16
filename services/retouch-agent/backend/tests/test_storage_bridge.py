@@ -32,19 +32,30 @@ def bridge_settings(monkeypatch):
 
 
 class FakeGallery:
-    """记录桥接请求并模拟 COS 直传/直读。"""
+    """记录桥接请求并模拟 COS 直传/直读。
+
+    响应统一使用云图库的 BaseResponse 信封 {code,data,message}，
+    以锁定真实网关契约。
+    """
 
     def __init__(self):
         self.requests: list[tuple[str, dict]] = []
         self.objects: dict[str, bytes] = {}
         self.reject = False
+        self.reject_business = False
+
+    @staticmethod
+    def _ok(data: dict) -> httpx.Response:
+        return httpx.Response(200, json={"code": 0, "data": data, "message": "ok"})
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.reject:
             return httpx.Response(500, text="gateway down")
+        if self.reject_business:
+            return httpx.Response(200, json={"code": 50001, "data": None, "message": "COS 未配置"})
         path = request.url.path
         if path.endswith("/health"):
-            return httpx.Response(200, json={"status": "ok"})
+            return self._ok({"status": "ok"})
         # COS 直传不需要桥接令牌
         if request.method == "PUT":
             self.objects[str(request.url)] = request.content
@@ -66,8 +77,8 @@ class FakeGallery:
         if request.method == "POST" and path.endswith("/storage/upload-request"):
             self.requests.append(("upload-request", body))
             if not body["object_key"].startswith("agent-temp/"):
-                return httpx.Response(400, text="对象键前缀非法")
-            return httpx.Response(200, json={"url": UPLOAD_URL, "object_key": body["object_key"]})
+                return self._ok({})
+            return self._ok({"url": UPLOAD_URL, "object_key": body["object_key"]})
         if request.method == "POST" and path.endswith("/storage/register"):
             self.requests.append(("register", body))
             data = self.objects.get(UPLOAD_URL)
@@ -75,13 +86,13 @@ class FakeGallery:
                 return httpx.Response(409, text="对象尚未上传")
             if body["sha256"] != hashlib.sha256(data).hexdigest():
                 return httpx.Response(400, text="SHA-256 不匹配")
-            return httpx.Response(200, json={"status": "registered"})
+            return self._ok({"status": "registered"})
         if request.method == "POST" and path.endswith("/storage/download-request"):
             self.requests.append(("download-request", body))
-            return httpx.Response(200, json={"url": DOWNLOAD_URL})
+            return self._ok({"url": DOWNLOAD_URL})
         if request.method == "POST" and path.endswith("/storage/cleanup"):
             self.requests.append(("cleanup", body))
-            return httpx.Response(200, json={"status": "scheduled"})
+            return self._ok({"status": "scheduled"})
         return httpx.Response(404)
 
 
@@ -179,6 +190,16 @@ async def test_bridge_error_when_gateway_down(bridge_settings, fake_gallery):
 
     with pytest.raises(storage_bridge.StorageBridgeError):
         await storage.put("agent-temp/u1/a1.png", b"data", "image/png")
+
+
+async def test_bridge_business_error_code_is_raised(bridge_settings, fake_gallery):
+    """云图库业务错误码（HTTP 200 + code != 0）同样视为失败。"""
+    fake_gallery.reject_business = True
+
+    with pytest.raises(storage_bridge.StorageBridgeError) as exc:
+        await storage.put("agent-temp/u1/a1.png", b"data", "image/png")
+
+    assert "COS 未配置" in str(exc.value)
 
 
 def test_ensure_bucket_probes_health(bridge_settings, monkeypatch):
