@@ -71,6 +71,8 @@ services:
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://rustfs:9000
       S3_PUBLIC_ENDPOINT: http://localhost:7313
+      INTEGRATION_MODE: ${AGENT_INTEGRATION_MODE:-false}
+      SERVICE_TOKEN_SECRET: ${AGENT_SERVICE_TOKEN_SECRET:-}
     volumes:
       - cv_models:/root/.u2net
     depends_on:
@@ -91,6 +93,8 @@ services:
       REDIS_URL: redis://redis:6379
       S3_ENDPOINT: http://rustfs:9000
       S3_PUBLIC_ENDPOINT: http://localhost:7313
+      INTEGRATION_MODE: ${AGENT_INTEGRATION_MODE:-false}
+      SERVICE_TOKEN_SECRET: ${AGENT_SERVICE_TOKEN_SECRET:-}
     volumes:
       - cv_models:/root/.u2net
     depends_on:

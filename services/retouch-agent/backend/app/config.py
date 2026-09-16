@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-secret-please-change-in-production"
     jwt_ttl_hours: int = 24
 
+    # 集成模式：true 时本服务仅接受云图库网关签发的服务令牌，
+    # 独立注册/登录接口与本服务前端入口同时关闭
+    integration_mode: bool = False
+    # 与云图库 Spring Boot 共享的 HMAC 密钥，集成模式必填且不少于 32 字节
+    service_token_secret: str = ""
+    # 服务令牌有效期（秒），验证端强制不超过 300 秒
+    service_token_ttl_seconds: int = 300
+
     # image provider: mock | dashscope
     image_provider: str = "mock"
     dashscope_api_key: str = ""
