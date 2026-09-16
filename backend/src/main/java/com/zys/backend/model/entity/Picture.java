@@ -83,6 +83,16 @@ public class Picture {
     private String picColor;
 
     /**
+     * 编辑乐观锁版本号
+     */
+    private Long editVersion;
+
+    /**
+     * 当前生效版本 id
+     */
+    private Long currentVersionId;
+
+    /**
      * 创建用户 id
      */
     private Long userId;
