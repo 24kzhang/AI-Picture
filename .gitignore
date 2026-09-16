@@ -131,3 +131,6 @@ videos/
 traces/
 *.trace.zip
 .coverage
+
+# 前端本地环境变量（端口等本机差异）
+.env.local

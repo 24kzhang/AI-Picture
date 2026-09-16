@@ -8,6 +8,7 @@ const AddPicturePage = () => import('@/pages/AddPicturePage.vue')
 const PictureManagePage = () => import('@/pages/admin/PictureManagePage.vue')
 const PictureDetailPage = () => import('@/pages/PictureDetailPage.vue')
 const AddPictureBatchPage = () => import('@/pages/AddPictureBatchPage.vue')
+const AgentEditorPage = () => import('@/pages/AgentEditorPage.vue')
 const SpaceManagePage = () => import('@/pages/admin/SpaceManagePage.vue')
 const AddSpacePage = () => import('@/pages/AddSpacePage.vue')
 const MySpacePage = () => import('@/pages/MySpacePage.vue')
@@ -48,6 +49,12 @@ const router = createRouter({
       path: '/picture/:id',
       name: '图片详情',
       component: PictureDetailPage,
+      props: true,
+    },
+    {
+      path: '/picture/:pictureId/agent',
+      name: 'Agent 智能精修',
+      component: AgentEditorPage,
       props: true,
     },
     {

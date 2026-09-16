@@ -10,6 +10,7 @@ import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -151,13 +152,22 @@ public class RetouchAgentClient {
     }
 
     /**
-     * 查询会话全部对话轮次
+     * 查询会话全部对话轮次（泛型安全：避免 List.class 反序列化成 Map）
      */
-    @SuppressWarnings("unchecked")
     public List<AgentTurnDTO> listMessages(String agentSessionId, AgentCallContext context) {
-        List<AgentTurnDTO> turns = (List<AgentTurnDTO>) (List<?>) get(
-                "/api/sessions/" + agentSessionId + "/messages", List.class, context);
-        return turns;
+        try {
+            HttpEntity<Void> entity = new HttpEntity<>(authHeaders(context));
+            ResponseEntity<List<AgentTurnDTO>> response = restTemplate.exchange(
+                    serviceUrl + "/api/sessions/" + agentSessionId + "/messages",
+                    HttpMethod.GET, entity, new ParameterizedTypeReference<List<AgentTurnDTO>>() {
+                    });
+            List<AgentTurnDTO> body = response.getBody();
+            return body == null ? Collections.emptyList() : body;
+        } catch (RestClientResponseException e) {
+            throw wrapAgentError(e);
+        } catch (ResourceAccessException e) {
+            throw unavailable();
+        }
     }
 
     /**

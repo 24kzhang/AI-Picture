@@ -15,6 +15,9 @@ if (Test-Path -LiteralPath $localEnv) {
     . $localEnv
 }
 
+# 端口可用 SERVER_PORT 覆盖（默认 8080；本机若被其他程序占用可改为 8090）
+$env:SERVER_PORT = if ($env:SERVER_PORT) { $env:SERVER_PORT } else { '8080' }
+$backendPort = [int]$env:SERVER_PORT
 $env:SPRING_PROFILES_ACTIVE = if ($env:SPRING_PROFILES_ACTIVE) { $env:SPRING_PROFILES_ACTIVE } else { 'local' }
 $env:DB_URL = if ($env:DB_URL) { $env:DB_URL } else { 'jdbc:mysql://localhost:3306/cloud_gallery?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false' }
 $env:DB_USERNAME = if ($env:DB_USERNAME) { $env:DB_USERNAME } else { 'root' }
@@ -56,14 +59,35 @@ function Test-Port {
     return $null -ne (Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
 }
 
-if (Test-Port -Port 8080) {
-    Write-Host '[backend] 8080 已有服务在运行，跳过重复启动。' -ForegroundColor Yellow
-    exit 0
+function Get-PortOwner {
+    param([int]$Port)
+    $connection = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $connection) {
+        return $null
+    }
+    $process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
+    return if ($process) { "$($process.ProcessName)(PID=$($process.Id))" } else { "PID=$($connection.OwningProcess)" }
+}
+
+if (Test-Port -Port $backendPort) {
+    $owner = Get-PortOwner -Port $backendPort
+    if ($owner -like 'java*') {
+        Write-Host "[backend] $backendPort 已有后端在运行（$owner），跳过重复启动。" -ForegroundColor Yellow
+        exit 0
+    }
+    Write-Host "[backend] $backendPort 被 $owner 占用，等待其释放（最多 60 秒）..." -ForegroundColor Yellow
+    $waitDeadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $waitDeadline -and (Test-Port -Port $backendPort)) {
+        Start-Sleep -Seconds 3
+    }
+    if (Test-Port -Port $backendPort) {
+        throw "$backendPort 仍被 $(Get-PortOwner -Port $backendPort) 占用，请释放后重试（或设置 SERVER_PORT 换端口）。"
+    }
 }
 
 # 生成环境包装脚本（runtime-data 已被 Git 忽略），避免在命令行里转义 JDBC 连接串
 $wrapper = Join-Path $projectRoot 'runtime-data\run-backend.ps1'
-$envNames = @('SPRING_PROFILES_ACTIVE', 'DB_URL', 'DB_USERNAME', 'DB_PASSWORD',
+$envNames = @('SPRING_PROFILES_ACTIVE', 'SERVER_PORT', 'DB_URL', 'DB_USERNAME', 'DB_PASSWORD',
     'REDIS_HOST', 'REDIS_PORT', 'REDIS_DATABASE', 'REDIS_PASSWORD',
     'VECTOR_SERVICE_URL', 'ALIYUN_AI_API_KEY',
     'AGENT_EDIT_ENABLED', 'AGENT_SERVICE_URL', 'AGENT_SERVICE_SECRET')
@@ -93,10 +117,10 @@ $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Argument
 if ($result.ReturnValue -ne 0) {
     throw "启动后端失败（WMI 返回 $($result.ReturnValue)）。"
 }
-Write-Host "[backend] 已启动（PID=$([int]$result.ProcessId)），日志：runtime-logs\backend-run.*.log" -ForegroundColor Gray
+Write-Host "[backend] 已启动（PID=$([int]$result.ProcessId)），端口 $backendPort，日志：runtime-logs\backend-run.*.log" -ForegroundColor Gray
 
 if ($NoWait) {
-    Write-Host '[backend] -NoWait：不等待就绪，请稍后轮询 http://127.0.0.1:8080/api/agent-internal/health' -ForegroundColor Gray
+    Write-Host "[backend] -NoWait：不等待就绪，请稍后轮询 http://127.0.0.1:$backendPort/api/agent-internal/health" -ForegroundColor Gray
     exit 0
 }
 
@@ -106,9 +130,9 @@ $deadline = $startTime.AddSeconds($TimeoutSeconds)
 $ready = $false
 $lastReport = $startTime
 while ((Get-Date) -lt $deadline) {
-    if (Test-Port -Port 8080) {
+    if (Test-Port -Port $backendPort) {
         try {
-            $resp = Invoke-WebRequest -Uri 'http://127.0.0.1:8080/api/agent-internal/health' -UseBasicParsing -TimeoutSec 3
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$backendPort/api/agent-internal/health" -UseBasicParsing -TimeoutSec 3
             if ($resp.StatusCode -eq 200) { $ready = $true; break }
         } catch { }
     }
@@ -120,7 +144,7 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if ($ready) {
-    Write-Host '[backend] 云图库后端已就绪：http://127.0.0.1:8080/api' -ForegroundColor Green
+    Write-Host "[backend] 云图库后端已就绪：http://127.0.0.1:$backendPort/api" -ForegroundColor Green
     exit 0
 }
 Write-Host '[backend] 后端未在超时时间内就绪，请查看 runtime-logs\backend-run.*.log。' -ForegroundColor Red

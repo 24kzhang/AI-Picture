@@ -89,6 +89,15 @@
               <a-button v-if="canEdit" :icon="h(EditOutlined)" type="default" @click="doEdit">
                 编辑
               </a-button>
+              <a-button
+                v-if="canEdit"
+                type="primary"
+                ghost
+                :icon="h(RobotOutlined)"
+                @click="doAgentEdit"
+              >
+                Agent 智能精修
+              </a-button>
               <a-button v-if="canDelete" :icon="h(DeleteOutlined)" danger @click="doDelete">
                 删除
               </a-button>
@@ -111,6 +120,7 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  RobotOutlined,
   SearchOutlined,
   ShareAltOutlined,
 } from '@ant-design/icons-vue'
@@ -200,6 +210,16 @@ const doEdit = () => {
       spaceId: picture.value.spaceId,
     },
   })
+}
+
+// 进入 Agent 智能精修工作台
+const doAgentEdit = () => {
+  const id = picture.value.id
+  if (!id) {
+    message.error('图片 id 不能为空')
+    return
+  }
+  router.push({ path: `/picture/${id}/agent` })
 }
 // 下载图片
 const doDownload = () => {
