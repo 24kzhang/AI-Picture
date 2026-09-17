@@ -1,6 +1,7 @@
 param(
     [switch]$NoWait,
-    [int]$TimeoutSeconds = 180
+    [int]$TimeoutSeconds = 180,
+    [string]$AgentEditEnabled
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +14,11 @@ New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 
 if (Test-Path -LiteralPath $localEnv) {
     . $localEnv
+}
+
+# 显式传入时覆盖本地环境文件中的同名开关（用于验证关闭 Agent 的降级行为）
+if ($PSBoundParameters.ContainsKey('AgentEditEnabled')) {
+    $env:AGENT_EDIT_ENABLED = $AgentEditEnabled
 }
 
 # 端口可用 SERVER_PORT 覆盖（默认 8080；本机若被其他程序占用可改为 8090）
@@ -66,7 +72,10 @@ function Get-PortOwner {
         return $null
     }
     $process = Get-Process -Id $connection.OwningProcess -ErrorAction SilentlyContinue
-    return if ($process) { "$($process.ProcessName)(PID=$($process.Id))" } else { "PID=$($connection.OwningProcess)" }
+    if ($process) {
+        return "$($process.ProcessName)(PID=$($process.Id))"
+    }
+    return "PID=$($connection.OwningProcess)"
 }
 
 if (Test-Port -Port $backendPort) {
