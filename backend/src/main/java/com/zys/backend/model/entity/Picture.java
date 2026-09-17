@@ -132,4 +132,14 @@ public class Picture {
      * 审核时间
      */
     private Date reviewTime;
+
+    /**
+     * 编辑乐观锁版本号，提交正式版本时递增
+     */
+    private Long editVersion;
+
+    /**
+     * 当前正式版本 id（picture_version.id）
+     */
+    private Long currentVersionId;
 }
