@@ -1,19 +1,28 @@
 package com.zys.backend.agent.controller;
 
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
+import com.zys.backend.agent.model.request.AgentCommitRequest;
 import com.zys.backend.agent.model.request.AgentFinalAssetRequest;
 import com.zys.backend.agent.model.request.AgentMessageRequest;
 import com.zys.backend.agent.model.request.AgentSelectionRequest;
 import com.zys.backend.agent.model.request.AgentToolRequest;
+import com.zys.backend.agent.model.request.VersionRestoreRequest;
 import com.zys.backend.agent.model.vo.AgentRunVO;
 import com.zys.backend.agent.model.vo.AgentSessionVO;
 import com.zys.backend.agent.model.vo.AgentToolVO;
+import com.zys.backend.agent.model.vo.PictureVersionVO;
+import com.zys.backend.agent.service.AgentAssetService;
+import com.zys.backend.agent.service.AgentAuthService;
+import com.zys.backend.agent.service.AgentCommitService;
 import com.zys.backend.agent.service.AgentSessionService;
 import com.zys.backend.common.BaseResponse;
 import com.zys.backend.common.ResultUtils;
+import com.zys.backend.model.entity.Picture;
 import com.zys.backend.model.entity.PictureAgentAsset;
 import com.zys.backend.model.entity.PictureEditSession;
 import com.zys.backend.model.entity.User;
+import com.zys.backend.model.enums.AgentAssetKindEnum;
 import com.zys.backend.service.UserService;
 import io.swagger.annotations.Api;
 import io.swagger.annotations.ApiOperation;
@@ -30,7 +39,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 
 /**
  * Agent 会话接口：会话、消息、工具、选区、撤销重做、租约。
@@ -43,6 +55,15 @@ public class AgentSessionController {
 
     @Resource
     private AgentSessionService agentSessionService;
+
+    @Resource
+    private AgentCommitService agentCommitService;
+
+    @Resource
+    private AgentAuthService agentAuthService;
+
+    @Resource
+    private AgentAssetService agentAssetService;
 
     @Resource
     private UserService userService;
@@ -173,6 +194,75 @@ public class AgentSessionController {
         User loginUser = userService.getLoginUser(request);
         agentSessionService.releaseLease(sessionId, loginUser);
         return ResultUtils.success(true);
+    }
+
+    @PostMapping("/agent-sessions/{sessionId}/commit")
+    @ApiOperation(value = "提交最终草稿为正式版本")
+    public BaseResponse<PictureVersionVO> commit(@PathVariable Long sessionId,
+                                                 @RequestBody AgentCommitRequest commitRequest,
+                                                 HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        PictureEditSession session = agentSessionService.requireSession(sessionId, loginUser, true);
+        PictureVersionVO version = agentCommitService.commit(session,
+                commitRequest == null ? null : commitRequest.getFinalAssetId(),
+                commitRequest == null ? null : commitRequest.getExpectedEditVersion(),
+                loginUser);
+        return ResultUtils.success(version);
+    }
+
+    @GetMapping("/picture/{pictureId}/versions")
+    @ApiOperation(value = "图片正式版本列表")
+    public BaseResponse<List<PictureVersionVO>> listVersions(@PathVariable Long pictureId, HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        Picture picture = agentSessionService.requirePicture(pictureId);
+        agentAuthService.requireView(loginUser, picture);
+        return ResultUtils.success(agentCommitService.listVersions(picture));
+    }
+
+    @PostMapping("/picture/{pictureId}/versions/{versionId}/restore")
+    @ApiOperation(value = "恢复历史版本（创建新版本）")
+    public BaseResponse<PictureVersionVO> restoreVersion(@PathVariable Long pictureId,
+                                                         @PathVariable Long versionId,
+                                                         @RequestBody(required = false) VersionRestoreRequest restoreRequest,
+                                                         HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        Picture picture = agentSessionService.requirePicture(pictureId);
+        PictureVersionVO version = agentCommitService.restore(picture, versionId,
+                restoreRequest == null ? null : restoreRequest.getExpectedEditVersion(), loginUser);
+        return ResultUtils.success(version);
+    }
+
+    @PostMapping("/agent-sessions/{sessionId}/export/zip")
+    @ApiOperation(value = "批量导出会话资产 ZIP")
+    public void exportZip(@PathVariable Long sessionId,
+                          @RequestParam(defaultValue = "delivery") String kind,
+                          HttpServletRequest request,
+                          HttpServletResponse response) throws Exception {
+        User loginUser = userService.getLoginUser(request);
+        agentSessionService.requireSession(sessionId, loginUser, false);
+        List<PictureAgentAsset> assets = "all".equals(kind)
+                ? agentAssetService.listBySession(sessionId, null)
+                : agentAssetService.listBySession(sessionId, kind);
+        response.setContentType("application/zip");
+        response.setHeader("Content-Disposition",
+                "attachment; filename=\"agent-assets-" + sessionId + ".zip\"");
+        int index = 0;
+        try (ZipOutputStream zip = new ZipOutputStream(response.getOutputStream())) {
+            for (PictureAgentAsset asset : assets) {
+                if (AgentAssetKindEnum.MASK.getValue().equals(asset.getKind())) {
+                    continue;
+                }
+                index++;
+                String suffix = StrUtil.blankToDefault(StrUtil.subAfter(asset.getUrl(), '.', true), "png");
+                String entryName = StrUtil.blankToDefault(asset.getSource(), "asset");
+                zip.putNextEntry(new ZipEntry(String.format("%s-%02d.%s", entryName, index, suffix)));
+                zip.write(agentAssetService.loadBytes(asset));
+                zip.closeEntry();
+            }
+        }
+        if (index == 0) {
+            log.info("会话 {} 没有可导出的资产（kind={}）", sessionId, kind);
+        }
     }
 
     @GetMapping("/agent/tools")
