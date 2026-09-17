@@ -42,6 +42,20 @@
         <a-button size="small" :disabled="!store.canEdit" @click="quickTool('split_layers', { with_text: false })">
           拆分图层
         </a-button>
+        <a-button
+          size="small"
+          :disabled="!store.canEdit"
+          @click="quickTool('generate_marketing', { kind: 'poster' })"
+        >
+          营销图
+        </a-button>
+        <a-button
+          size="small"
+          :disabled="!store.canEdit"
+          @click="quickTool('prepare_delivery_sizes', {})"
+        >
+          投放尺寸
+        </a-button>
       </a-space>
     </div>
     <a-button

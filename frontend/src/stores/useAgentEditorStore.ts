@@ -29,10 +29,11 @@ import {
   type PictureVersion,
 } from '@/api/agent'
 import { openRunEvents } from '@/utils/agentRunEventSource'
+import { isTerminalRun, mergeRunEventInto } from '@/utils/agentStatus'
 
 /** 运行是否终态 */
 function isTerminal(status?: string | null) {
-  return status === 'succeeded' || status === 'failed' || status === 'canceled'
+  return isTerminalRun(status)
 }
 
 const HEARTBEAT_INTERVAL_MS = 20000
@@ -58,6 +59,8 @@ export const useAgentEditorStore = defineStore('agentEditor', () => {
   let heartbeatTimer: number | null = null
   let closeEvents: (() => void) | null = null
   let pollTimer: number | null = null
+  /** 已应用的事件 id（同一事件只合并一次） */
+  const appliedEventIds = new Set<string>()
 
   const canvas = computed<AgentSessionDetail | null>(() => session.value?.canvas ?? null)
   const turns = computed<AgentTurn[]>(() => session.value?.turns ?? [])
@@ -112,18 +115,10 @@ export const useAgentEditorStore = defineStore('agentEditor', () => {
     activeRunProgress.value = event.progress ?? activeRunProgress.value
     activeRunStage.value = event.stage ?? null
     if (session.value) {
-      const list = session.value.turns.map((turn) =>
-        String(turn.id) === String(event.runId)
-          ? {
-              ...turn,
-              status: event.status,
-              progress: event.progress ?? turn.progress,
-              stage: event.stage ?? turn.stage,
-              steps: event.steps ?? turn.steps,
-            }
-          : turn,
-      )
-      session.value = { ...session.value, turns: list }
+      const [next, applied] = mergeRunEventInto(session.value.turns, event, appliedEventIds)
+      if (applied) {
+        session.value = { ...session.value, turns: next }
+      }
     }
   }
 

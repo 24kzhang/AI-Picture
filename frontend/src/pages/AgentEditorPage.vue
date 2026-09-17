@@ -105,6 +105,7 @@
           </a-space>
           <a-space>
             <a-button @click="versionDialogRef?.open()">版本记录</a-button>
+            <a-button :disabled="!store.session" @click="doExport">导出 ZIP</a-button>
             <a-button
               type="primary"
               :disabled="!store.canCommit"
@@ -160,7 +161,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { useAgentEditorStore } from '@/stores/useAgentEditorStore'
-import { AgentAsset, PictureVersion } from '@/api/agent'
+import { AgentAsset, PictureVersion, createAgentExport } from '@/api/agent'
 import AgentCanvas from '@/components/agent/AgentCanvas.vue'
 import AgentChatPanel from '@/components/agent/AgentChatPanel.vue'
 import AgentLayerPanel from '@/components/agent/AgentLayerPanel.vue'
@@ -295,6 +296,18 @@ async function cancelSession() {
     message.info('草稿已取消，编辑租约已释放')
   } catch {
     message.error('取消失败')
+  }
+}
+
+async function doExport() {
+  if (!store.session) {
+    return
+  }
+  try {
+    const exportInfo = await createAgentExport({ sessionId: store.session.id })
+    window.open(exportInfo.downloadUrl, '_blank')
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '导出失败')
   }
 }
 

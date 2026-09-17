@@ -291,3 +291,79 @@ export function restorePictureVersion(
     request.post(`/api/picture/${pictureId}/versions/${versionId}/restore`, { expectedEditVersion }),
   )
 }
+
+// ---------------------------------------------------------------------------
+// 批量处理与导出
+// ---------------------------------------------------------------------------
+
+export interface AgentBatchItem {
+  pictureId: string | number
+  pictureName?: string
+  sourceAssetId?: string
+  baseEditVersion?: string | number
+  status: string
+  error?: string | null
+  outputAssetIds?: string[]
+  outputUrls?: string[]
+  versionId?: string | number | null
+  versionNo?: string | number | null
+}
+
+export interface AgentBatch {
+  batchId: string
+  status: string
+  progress?: number
+  stage?: string | null
+  error?: string | null
+  canceled?: boolean
+  items: AgentBatchItem[]
+}
+
+export interface AgentExport {
+  exportId: string
+  filename: string
+  downloadUrl: string
+}
+
+/** 批量操作的可用工具（与 Agent 批量服务保持一致） */
+export const AGENT_BATCH_OPERATIONS: { value: string; label: string }[] = [
+  { value: 'remove_background', label: '去背景' },
+  { value: 'replace_background', label: '换背景' },
+  { value: 'adjust_image', label: '调色' },
+  { value: 'upscale_image', label: '超分' },
+  { value: 'expand_canvas', label: '扩图' },
+  { value: 'prepare_delivery_sizes', label: '投放尺寸' },
+]
+
+/** 创建批量任务（最多 20 张） */
+export function createAgentBatch(payload: {
+  pictureIds: (string | number)[]
+  operations: string[]
+  formats: string[]
+}) {
+  return unwrap<AgentBatch>(request.post('/api/agent-batches', payload))
+}
+
+/** 查询批量任务 */
+export function getAgentBatch(batchId: string) {
+  return unwrap<AgentBatch>(request.get(`/api/agent-batches/${batchId}`))
+}
+
+/** 逐项确认批量结果 */
+export function confirmAgentBatch(batchId: string) {
+  return unwrap<AgentBatchItem[]>(request.post(`/api/agent-batches/${batchId}/confirm`))
+}
+
+/** 取消批量任务 */
+export function cancelAgentBatch(batchId: string) {
+  return unwrap<boolean>(request.post(`/api/agent-batches/${batchId}/cancel`))
+}
+
+/** 创建导出凭证（会话或批量） */
+export function createAgentExport(payload: {
+  sessionId?: string | number
+  batchId?: string
+  assetIds?: string[]
+}) {
+  return unwrap<AgentExport>(request.post('/api/agent-exports', payload))
+}
