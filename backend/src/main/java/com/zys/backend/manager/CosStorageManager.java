@@ -18,6 +18,7 @@ import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.model.dto.file.UploadPictureResult;
 import com.zys.backend.service.SystemSettingsService;
+import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
@@ -40,6 +41,7 @@ import java.nio.file.StandardCopyOption;
 import java.time.LocalDate;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -315,6 +317,48 @@ public class CosStorageManager {
                 client.shutdown();
             }
         }
+    }
+
+    /**
+     * 列举指定前缀的对象（最多 maxKeys 条）
+     */
+    public List<CosObjectInfo> listObjects(String prefix, int maxKeys) {
+        Settings settings = readSettings();
+        COSClient client = null;
+        List<CosObjectInfo> result = new java.util.ArrayList<>();
+        try {
+            client = createClient(settings);
+            com.qcloud.cos.model.ObjectListing listing = client.listObjects(
+                    new com.qcloud.cos.model.ListObjectsRequest(
+                            settings.bucket, prefix, null, null, maxKeys));
+            for (com.qcloud.cos.model.COSObjectSummary summary : listing.getObjectSummaries()) {
+                CosObjectInfo info = new CosObjectInfo();
+                info.setKey(summary.getKey());
+                info.setSize(summary.getSize());
+                info.setLastModified(summary.getLastModified());
+                result.add(info);
+            }
+        } catch (Exception e) {
+            log.warn("列举 COS 对象失败，prefix={}", prefix, e);
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 对象摘要信息
+     */
+    @Data
+    public static class CosObjectInfo {
+
+        private String key;
+
+        private long size;
+
+        private Date lastModified;
     }
 
     private Settings readSettings() {

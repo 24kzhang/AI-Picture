@@ -78,6 +78,13 @@ gallery:
       enabled: ${AGENT_OUTBOX_ENABLED:true}
       poll-interval-ms: ${AGENT_OUTBOX_POLL_INTERVAL_MS:5000}
       initial-delay-ms: ${AGENT_OUTBOX_INITIAL_DELAY_MS:15000}
+    cleanup:
+      # Agent 临时对象（agent-temp/）清理：默认每日 3:30，保留 7 天
+      enabled: ${AGENT_TEMP_CLEANUP_ENABLED:true}
+      retention-days: ${AGENT_TEMP_RETENTION_DAYS:7}
+      cron: ${AGENT_TEMP_CLEANUP_CRON:0 30 3 * * ?}
+    # 浏览器可达的云图库地址（导出下载链接使用）
+    public-base-url: ${GALLERY_PUBLIC_URL:http://localhost:8080}
 
 cos:
   client:

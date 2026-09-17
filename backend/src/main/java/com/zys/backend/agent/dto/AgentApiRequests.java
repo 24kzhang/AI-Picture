@@ -108,4 +108,44 @@ public final class AgentApiRequests {
 
         private Long expectedEditVersion;
     }
+
+    /**
+     * 创建批量处理任务
+     */
+    @Data
+    public static class BatchCreateRequest {
+
+        private List<Long> pictureIds;
+
+        private List<String> operations;
+
+        private List<String> formats;
+
+        public void validate() {
+            ThrowUtils.throwIf(pictureIds == null || pictureIds.isEmpty(),
+                    ErrorCode.PARAMS_ERROR, "请选择要处理的图片");
+            ThrowUtils.throwIf(pictureIds.size() > 20, ErrorCode.PARAMS_ERROR, "批量最多 20 张");
+            ThrowUtils.throwIf(operations == null || operations.isEmpty(),
+                    ErrorCode.PARAMS_ERROR, "请选择至少一个处理操作");
+            ThrowUtils.throwIf(operations.size() > 6, ErrorCode.PARAMS_ERROR, "批量操作最多 6 步");
+        }
+    }
+
+    /**
+     * 创建导出任务
+     */
+    @Data
+    public static class ExportCreateRequest {
+
+        private Long sessionId;
+
+        private String batchId;
+
+        private List<String> assetIds;
+
+        public void validate() {
+            ThrowUtils.throwIf(sessionId == null && (batchId == null || batchId.isBlank()),
+                    ErrorCode.PARAMS_ERROR, "请提供会话或批量任务");
+        }
+    }
 }

@@ -38,8 +38,9 @@ class AgentServiceTokenVerifierTest {
     @Test
     void tamperedTokenRejected() {
         String token = serviceToken();
-        String forged = token.substring(0, token.length() - 1)
-                + (token.endsWith("A") ? "B" : "A");
+        String[] parts = token.split("\\.");
+        char first = parts[1].charAt(0);
+        String forged = parts[0] + "." + (first == 'A' ? 'B' : 'A') + parts[1].substring(1);
         assertNull(AgentServiceTokenVerifier.verifyServiceToken(forged, SECRET));
     }
 
@@ -81,8 +82,10 @@ class AgentServiceTokenVerifierTest {
     @Test
     void assetTokenForgedRejected() {
         String token = AgentServiceTokenIssuer.issueObjectToken("agent-temp/u1/a1.png", SECRET, 3600);
-        String forged = token.substring(0, token.length() - 1)
-                + (token.endsWith("A") ? "B" : "A");
+        // 修改签名段首个字符（确保解码字节发生变化，避免仅改动填充位导致的假通过）
+        String[] parts = token.split("\\.");
+        char first = parts[1].charAt(0);
+        String forged = parts[0] + "." + (first == 'A' ? 'B' : 'A') + parts[1].substring(1);
         assertNull(AgentServiceTokenVerifier.readAssetToken(forged, SECRET));
         assertNull(AgentServiceTokenVerifier.readAssetToken(serviceToken(), SECRET));
     }

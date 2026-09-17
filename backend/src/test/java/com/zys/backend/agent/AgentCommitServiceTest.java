@@ -76,6 +76,9 @@ class AgentCommitServiceTest {
     private com.zys.backend.manager.lease.EditLeaseService editLeaseService;
 
     @Mock
+    private AgentMetrics agentMetrics;
+
+    @Mock
     private TransactionTemplate transactionTemplate;
 
     @InjectMocks

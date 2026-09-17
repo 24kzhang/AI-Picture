@@ -94,6 +94,9 @@ public class AgentCommitService {
     private EditLeaseService editLeaseService;
 
     @Resource
+    private AgentMetrics agentMetrics;
+
+    @Resource
     private TransactionTemplate transactionTemplate;
 
     @org.springframework.beans.factory.annotation.Value("${gallery.retouch.token-secret:}")
@@ -165,81 +168,126 @@ public class AgentCommitService {
         ThrowUtils.throwIf(!permissions.contains(SpaceUserPermissionConstant.PICTURE_EDIT),
                 ErrorCode.NO_AUTH_ERROR, "无图片编辑权限");
 
-        // 版本冲突：保留草稿，会话标记冲突
+        // 版本冲突：保留草稿并提前失败，避免无谓的素材下载
         Long currentVersion = picture.getEditVersion() == null ? 0L : picture.getEditVersion();
         if (expectedEditVersion == null || !expectedEditVersion.equals(currentVersion)) {
+            agentMetrics.incrementCommitConflict();
             record.setStatus(PictureEditSessionStatusEnum.CONFLICT.getValue());
             record.setUpdateTime(new Date());
             editSessionMapper.updateById(record);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
         }
 
-        // 懒建初始版本（V1 图片首次进入版本体系），必须先于版本号分配
-        pictureVersionManager.ensureInitialVersion(picture);
-        // 下载最终草稿并验证可解码（版本号先分配，COS 键与版本记录保持一致）
-        long versionNo = pictureVersionManager.nextVersionNo(picture.getId());
-        UploadPictureResult uploaded = downloadAndStoreVersion(record, picture, versionNo);
+        String assetUrl = finalAssetUrl(record);
         PictureVersionVO vo;
         try {
-            vo = transactionTemplate.execute(txStatus -> {
-                // 1. 插入新版本
-                Picture newValues = new Picture();
-                newValues.setId(picture.getId());
-                newValues.setUrl(uploaded.getUrl());
-                newValues.setThumbnailUrl(uploaded.getThumbnailUrl());
-                newValues.setPicSize(uploaded.getPicSize());
-                newValues.setPicWidth(uploaded.getPicWidth());
-                newValues.setPicHeight(uploaded.getPicHeight());
-                newValues.setPicScale(uploaded.getPicScale());
-                newValues.setPicFormat(uploaded.getPicFormat());
-                newValues.setPicColor(uploaded.getPicColor());
-                PictureVersion version = pictureVersionManager.recordVersion(newValues, versionNo,
-                        PictureVersionSourceEnum.AGENT, record.getId(), null, loginUser.getId());
-                // 2. 乐观锁更新图片
-                LambdaUpdateWrapper<Picture> update = new LambdaUpdateWrapper<Picture>()
-                        .eq(Picture::getId, picture.getId())
-                        .eq(Picture::getEditVersion, currentVersion)
-                        .set(Picture::getUrl, uploaded.getUrl())
-                        .set(Picture::getThumbnailUrl, uploaded.getThumbnailUrl())
-                        .set(Picture::getPicSize, uploaded.getPicSize())
-                        .set(Picture::getPicWidth, uploaded.getPicWidth())
-                        .set(Picture::getPicHeight, uploaded.getPicHeight())
-                        .set(Picture::getPicScale, uploaded.getPicScale())
-                        .set(Picture::getPicFormat, uploaded.getPicFormat())
-                        .set(Picture::getPicColor, uploaded.getPicColor())
-                        .set(Picture::getCurrentVersionId, version.getId())
-                        .set(Picture::getEditTime, new Date())
-                        .setSql("editVersion = editVersion + 1");
-                if (!pictureService.update(update)) {
-                    throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
-                }
-                // 3. 空间容量差额
-                if (picture.getSpaceId() != null) {
-                    long diff = uploaded.getPicSize() - (picture.getPicSize() == null ? 0L : picture.getPicSize());
-                    applySpaceSizeDelta(picture.getSpaceId(), diff);
-                }
-                // 4. 会话置 COMMITTED
-                record.setStatus(PictureEditSessionStatusEnum.COMMITTED.getValue());
-                record.setCommittedVersionId(version.getId());
+            vo = commitAssetVersion(picture, assetUrl, PictureVersionSourceEnum.AGENT,
+                    record.getId(), null, expectedEditVersion, loginUser, record);
+        } catch (BusinessException conflict) {
+            // 版本冲突：保留草稿，会话标记冲突
+            if (!PictureEditSessionStatusEnum.COMMITTED.getValue().equals(record.getStatus())) {
+                record.setStatus(PictureEditSessionStatusEnum.CONFLICT.getValue());
                 record.setUpdateTime(new Date());
                 editSessionMapper.updateById(record);
-                // 5. Outbox：版本事件 + 向量重建
-                writeOutbox("PICTURE_VERSION_COMMITTED", picture.getId(), version, record, loginUser);
-                writeOutbox("PICTURE_VECTOR_REINDEX_REQUIRED", picture.getId(), version, record, loginUser);
-                return toVersionVO(version);
-            });
-        } catch (BusinessException conflict) {
-            // 事务失败但 COS 已写入：孤儿对象清理
-            cleanupOrphan(uploaded);
+            }
             throw conflict;
-        } catch (RuntimeException e) {
-            cleanupOrphan(uploaded);
-            throw e;
         }
         // 提交成功，释放编辑租约
         editLeaseService.releaseForSession(record.getPictureId(), EditLeaseService.MODE_AGENT,
                 record.getUserId(), String.valueOf(record.getId()));
         return vo;
+    }
+
+    /**
+     * 将 Agent 资产写为指定图片的新版本（单个提交、批量提交与恢复共用）。
+     * 校验乐观锁 → 懒建初始版本 → 复制到永久 COS 键 → 事务写版本/更新图片/空间差额/Outbox。
+     *
+     * @param session 非空时在同一事务内置为 COMMITTED 并记录提交版本
+     */
+    public PictureVersionVO commitAssetVersion(Picture picture, String assetUrl,
+                                               PictureVersionSourceEnum source, Long sourceSessionId,
+                                               Long sourceRunId, Long expectedEditVersion, User operator) {
+        return commitAssetVersion(picture, assetUrl, source, sourceSessionId, sourceRunId,
+                expectedEditVersion, operator, null);
+    }
+
+    /**
+     * 将 Agent 资产写为指定图片的新版本（支持传入待置为 COMMITTED 的编辑会话）
+     */
+    public PictureVersionVO commitAssetVersion(Picture picture, String assetUrl,
+                                               PictureVersionSourceEnum source, Long sourceSessionId,
+                                               Long sourceRunId, Long expectedEditVersion, User operator,
+                                               PictureEditSession session) {
+        Long currentVersion = picture.getEditVersion() == null ? 0L : picture.getEditVersion();
+        if (expectedEditVersion == null || !expectedEditVersion.equals(currentVersion)) {
+            agentMetrics.incrementCommitConflict();
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
+        }
+        // 懒建初始版本（V1 图片首次进入版本体系），必须先于版本号分配
+        pictureVersionManager.ensureInitialVersion(picture);
+        // 下载结果并验证可解码（版本号先分配，COS 键与版本记录保持一致）
+        long versionNo = pictureVersionManager.nextVersionNo(picture.getId());
+        UploadPictureResult uploaded = downloadUrlAndStoreVersion(assetUrl, picture, versionNo);
+        try {
+            return writeVersionTransaction(picture, uploaded, versionNo, source, sourceSessionId,
+                    sourceRunId, currentVersion, operator, session);
+        } catch (RuntimeException e) {
+            // 事务失败但 COS 已写入：孤儿对象清理
+            cleanupOrphan(uploaded);
+            throw e;
+        }
+    }
+
+    private PictureVersionVO writeVersionTransaction(Picture picture, UploadPictureResult uploaded,
+                                                     long versionNo, PictureVersionSourceEnum source,
+                                                     Long sourceSessionId, Long sourceRunId,
+                                                     Long currentVersion, User operator,
+                                                     PictureEditSession session) {
+        return transactionTemplate.execute(txStatus -> {
+            Picture newValues = new Picture();
+            newValues.setId(picture.getId());
+            newValues.setUrl(uploaded.getUrl());
+            newValues.setThumbnailUrl(uploaded.getThumbnailUrl());
+            newValues.setPicSize(uploaded.getPicSize());
+            newValues.setPicWidth(uploaded.getPicWidth());
+            newValues.setPicHeight(uploaded.getPicHeight());
+            newValues.setPicScale(uploaded.getPicScale());
+            newValues.setPicFormat(uploaded.getPicFormat());
+            newValues.setPicColor(uploaded.getPicColor());
+            PictureVersion version = pictureVersionManager.recordVersion(newValues, versionNo,
+                    source, sourceSessionId, sourceRunId, operator.getId());
+            LambdaUpdateWrapper<Picture> update = new LambdaUpdateWrapper<Picture>()
+                    .eq(Picture::getId, picture.getId())
+                    .eq(Picture::getEditVersion, currentVersion)
+                    .set(Picture::getUrl, uploaded.getUrl())
+                    .set(Picture::getThumbnailUrl, uploaded.getThumbnailUrl())
+                    .set(Picture::getPicSize, uploaded.getPicSize())
+                    .set(Picture::getPicWidth, uploaded.getPicWidth())
+                    .set(Picture::getPicHeight, uploaded.getPicHeight())
+                    .set(Picture::getPicScale, uploaded.getPicScale())
+                    .set(Picture::getPicFormat, uploaded.getPicFormat())
+                    .set(Picture::getPicColor, uploaded.getPicColor())
+                    .set(Picture::getCurrentVersionId, version.getId())
+                    .set(Picture::getEditTime, new Date())
+                    .setSql("editVersion = editVersion + 1");
+            if (!pictureService.update(update)) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
+            }
+            if (picture.getSpaceId() != null) {
+                long diff = uploaded.getPicSize() - (picture.getPicSize() == null ? 0L : picture.getPicSize());
+                applySpaceSizeDelta(picture.getSpaceId(), diff);
+            }
+            if (session != null) {
+                session.setStatus(PictureEditSessionStatusEnum.COMMITTED.getValue());
+                session.setCommittedVersionId(version.getId());
+                session.setUpdateTime(new Date());
+                editSessionMapper.updateById(session);
+            }
+            // Outbox：版本事件 + 向量重建
+            writeOutbox(OutboxDispatcherService.EVENT_VERSION_COMMITTED, picture.getId(), version, session, operator);
+            writeOutbox(OutboxDispatcherService.EVENT_VECTOR_REINDEX, picture.getId(), version, session, operator);
+            return toVersionVO(version);
+        });
     }
 
     /**
@@ -266,10 +314,6 @@ public class AgentCommitService {
         PictureVersion source = pictureVersionMapper.selectById(versionId);
         ThrowUtils.throwIf(source == null || !pictureId.equals(source.getPictureId()),
                 ErrorCode.NOT_FOUND_ERROR, "版本不存在");
-        Long currentVersion = picture.getEditVersion() == null ? 0L : picture.getEditVersion();
-        if (expectedEditVersion == null || !expectedEditVersion.equals(currentVersion)) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
-        }
 
         // 恢复也要持有编辑租约：临时占用 AGENT 锁，结束后释放
         String restoreSessionId = "restore-" + pictureId;
@@ -278,69 +322,23 @@ public class AgentCommitService {
         ThrowUtils.throwIf(lease == null, ErrorCode.OPERATION_ERROR,
                 "另一位用户正在编辑该图片，请稍后再试");
         try {
-            // 懒建初始版本后下载旧版本内容，复制到新版本目录
-            pictureVersionManager.ensureInitialVersion(picture);
-            long versionNo = pictureVersionManager.nextVersionNo(picture.getId());
-            UploadPictureResult uploaded = downloadUrlAndStoreVersion(source.getUrl(), picture, versionNo);
-            try {
-                return transactionTemplate.execute(txStatus -> {
-                    Picture newValues = new Picture();
-                    newValues.setId(picture.getId());
-                    newValues.setUrl(uploaded.getUrl());
-                    newValues.setThumbnailUrl(uploaded.getThumbnailUrl());
-                    newValues.setPicSize(uploaded.getPicSize());
-                    newValues.setPicWidth(uploaded.getPicWidth());
-                    newValues.setPicHeight(uploaded.getPicHeight());
-                    newValues.setPicScale(uploaded.getPicScale());
-                    newValues.setPicFormat(uploaded.getPicFormat());
-                    newValues.setPicColor(uploaded.getPicColor());
-                    PictureVersion version = pictureVersionManager.recordVersion(newValues, versionNo,
-                            PictureVersionSourceEnum.RESTORE, null, null, loginUser.getId());
-                    LambdaUpdateWrapper<Picture> update = new LambdaUpdateWrapper<Picture>()
-                            .eq(Picture::getId, picture.getId())
-                            .eq(Picture::getEditVersion, currentVersion)
-                            .set(Picture::getUrl, uploaded.getUrl())
-                            .set(Picture::getThumbnailUrl, uploaded.getThumbnailUrl())
-                            .set(Picture::getPicSize, uploaded.getPicSize())
-                            .set(Picture::getPicWidth, uploaded.getPicWidth())
-                            .set(Picture::getPicHeight, uploaded.getPicHeight())
-                            .set(Picture::getPicScale, uploaded.getPicScale())
-                            .set(Picture::getPicFormat, uploaded.getPicFormat())
-                            .set(Picture::getPicColor, uploaded.getPicColor())
-                            .set(Picture::getCurrentVersionId, version.getId())
-                            .set(Picture::getEditTime, new Date())
-                            .setSql("editVersion = editVersion + 1");
-                    if (!pictureService.update(update)) {
-                        throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被他人更新，请刷新后重试");
-                    }
-                    if (picture.getSpaceId() != null) {
-                        long diff = uploaded.getPicSize() - (picture.getPicSize() == null ? 0L : picture.getPicSize());
-                        applySpaceSizeDelta(picture.getSpaceId(), diff);
-                    }
-                    writeOutbox("PICTURE_VERSION_COMMITTED", picture.getId(), version, null, loginUser);
-                    writeOutbox("PICTURE_VECTOR_REINDEX_REQUIRED", picture.getId(), version, null, loginUser);
-                    return toVersionVO(version);
-                });
-            } catch (RuntimeException e) {
-                cleanupOrphan(uploaded);
-                throw e;
-            }
+            return commitAssetVersion(picture, source.getUrl(), PictureVersionSourceEnum.RESTORE,
+                    null, null, expectedEditVersion, loginUser);
         } finally {
             editLeaseService.release(pictureId, lease.getLockToken());
         }
     }
 
     /**
-     * 下载 Agent 会话最终草稿，复制到永久版本目录
+     * 读取会话最终草稿的资产地址
      */
-    private UploadPictureResult downloadAndStoreVersion(PictureEditSession record, Picture picture,
-                                                         long versionNo) {
+    private String finalAssetUrl(PictureEditSession record) {
         AgentCallContext context = AgentCallContext.builder().userId(record.getUserId()).build();
         AgentSessionDetailDTO detail = agentClient.getSession(record.getAgentSessionId(), context);
         AgentAssetDTO finalAsset = findAsset(detail, record.getFinalAgentAssetId());
         ThrowUtils.throwIf(finalAsset == null || finalAsset.getUrl() == null,
                 ErrorCode.OPERATION_ERROR, "最终草稿不存在，请重试");
-        return downloadUrlAndStoreVersion(finalAsset.getUrl(), picture, versionNo);
+        return finalAsset.getUrl();
     }
 
     private UploadPictureResult downloadUrlAndStoreVersion(String assetUrl, Picture picture,

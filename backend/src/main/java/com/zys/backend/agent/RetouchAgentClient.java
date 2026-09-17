@@ -267,6 +267,52 @@ public class RetouchAgentClient {
         return post("/api/generations", payload, AgentRunDTO.class, context);
     }
 
+    /**
+     * 查询素材详情（含短时访问 URL）
+     */
+    public AgentAssetDTO getAsset(String assetId, AgentCallContext context) {
+        return get("/api/assets/" + assetId, AgentAssetDTO.class, context);
+    }
+
+    /**
+     * 提交批量处理任务
+     */
+    public AgentRunDTO createBatch(Map<String, Object> payload, AgentCallContext context) {
+        return post("/api/batches", payload, AgentRunDTO.class, context);
+    }
+
+    /**
+     * 下载批量任务产物 ZIP
+     */
+    public byte[] exportBatch(String batchRunId, AgentCallContext context) {
+        return download("/api/batches/" + batchRunId + "/export", context);
+    }
+
+    /**
+     * 下载会话导出 ZIP
+     */
+    public byte[] exportSession(String agentSessionId, Map<String, Object> payload, AgentCallContext context) {
+        return download("/api/sessions/" + agentSessionId + "/exports", context, payload);
+    }
+
+    private byte[] download(String path, AgentCallContext context) {
+        return download(path, context, null);
+    }
+
+    private byte[] download(String path, AgentCallContext context, Object payload) {
+        try {
+            HttpEntity<Object> entity = new HttpEntity<>(payload, authHeaders(context));
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    serviceUrl + path, HttpMethod.POST, entity, byte[].class);
+            byte[] body = response.getBody();
+            return body == null ? new byte[0] : body;
+        } catch (RestClientResponseException e) {
+            throw wrapAgentError(e);
+        } catch (ResourceAccessException e) {
+            throw unavailable();
+        }
+    }
+
     private HttpHeaders authHeaders(AgentCallContext context) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);

@@ -47,6 +47,9 @@ public class AgentRunEventService {
     @Resource
     private PictureEditRunMapper editRunMapper;
 
+    @Resource
+    private AgentMetrics agentMetrics;
+
     private final ScheduledExecutorService scheduler =
             Executors.newScheduledThreadPool(2, r -> {
                 Thread thread = new Thread(r, "agent-run-events");
@@ -70,6 +73,7 @@ public class AgentRunEventService {
     public SseEmitter subscribe(PictureEditRun run, PictureEditSession session, User loginUser) {
         SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
         long runId = run.getId();
+        agentMetrics.incrementSseConnection();
         activeRunCount.merge(runId, 1, Integer::sum);
 
         // 1. 数据库快照先行
@@ -107,6 +111,65 @@ public class AgentRunEventService {
         return emitter;
     }
 
+    /**
+     * 订阅仅存在于 Agent 侧的运行（如批量任务）：无云图库运行记录，直接轮询 Agent 快照。
+     */
+    public SseEmitter subscribeAgentRun(String agentRunId, AgentCallContext context) {
+        SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
+        agentMetrics.incrementSseConnection();
+        ScheduledFuture<?> poller = scheduler.scheduleWithFixedDelay(
+                () -> pollAgentRun(emitter, agentRunId, context),
+                0, POLL_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        ScheduledFuture<?> heartbeat = scheduler.scheduleWithFixedDelay(() -> {
+            try {
+                emitter.send(SseEmitter.event().comment("ping"));
+            } catch (IOException ignored) {
+                // 连接已断开，由 poller 统一结束
+            }
+        }, HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        emitter.onCompletion(() -> cancelSimple(poller, heartbeat));
+        emitter.onTimeout(() -> {
+            cancelSimple(poller, heartbeat);
+            emitter.complete();
+        });
+        emitter.onError(t -> cancelSimple(poller, heartbeat));
+        return emitter;
+    }
+
+    private void pollAgentRun(SseEmitter emitter, String agentRunId, AgentCallContext context) {
+        try {
+            AgentRunDTO live = agentClient.getRun(agentRunId, context);
+            if (live == null) {
+                return;
+            }
+            Map<String, Object> data = new HashMap<>();
+            data.put("eventId", agentRunId + "-" + System.currentTimeMillis());
+            data.put("runId", agentRunId);
+            data.put("status", live.getStatus());
+            data.put("stage", live.getStage());
+            data.put("progress", live.getProgress());
+            data.put("message", live.getError());
+            data.put("timestamp", System.currentTimeMillis());
+            if (live.getResult() != null) {
+                data.put("items", live.getResult().get("items"));
+            }
+            emitter.send(SseEmitter.event().name("snapshot").data(data));
+            if (AgentRunStatusEnum.isTerminal(live.getStatus())) {
+                agentMetrics.recordRunStatus(live.getStatus());
+                emitter.complete();
+            }
+        } catch (BusinessException e) {
+            log.debug("轮询 Agent 运行 {} 失败：{}", agentRunId, e.getMessage());
+        } catch (IOException e) {
+            emitter.completeWithError(e);
+        }
+    }
+
+    private void cancelSimple(ScheduledFuture<?> poller, ScheduledFuture<?> heartbeat) {
+        poller.cancel(false);
+        heartbeat.cancel(false);
+    }
+
     private void pollOnce(SseEmitter emitter, long runId, String lastFingerprint,
                           PictureEditSession session, User loginUser) {
         try {
@@ -118,6 +181,7 @@ public class AgentRunEventService {
             boolean terminal = AgentRunStatusEnum.isTerminal(run.getStatus());
             if (terminal) {
                 // 终态：再补一次快照后结束
+                agentMetrics.recordRunStatus(run.getStatus());
                 sendUpdate(emitter, runId, run, null);
                 emitter.complete();
                 return;

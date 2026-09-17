@@ -75,7 +75,10 @@ async def test_missing_token_rejected(client: httpx.AsyncClient, integration_set
 
 async def test_tampered_token_rejected(client: httpx.AsyncClient, integration_settings):
     token = gallery_token()
-    forged = token[:-1] + ("A" if token[-1] != "A" else "B")
+    # 修改签名段首个字符（确保解码字节变化，避免仅改动填充位导致的假通过）
+    payload_part, signature_part = token.split(".", 1)
+    forged_signature = ("B" if signature_part[0] == "A" else "A") + signature_part[1:]
+    forged = f"{payload_part}.{forged_signature}"
 
     response = await client.get("/api/assets", headers={GALLERY_TOKEN_HEADER: forged})
 
