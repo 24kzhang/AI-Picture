@@ -1,10 +1,13 @@
 package com.zys.backend.manager.websocket;
 
 import cn.hutool.core.collection.CollUtil;
+import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
+import com.zys.backend.agent.service.EditLeaseService;
+import com.zys.backend.constant.AgentConstant;
 import com.zys.backend.manager.websocket.disruptor.PictureEditEventProducer;
 import com.zys.backend.manager.websocket.model.PictureEditActionEnum;
 import com.zys.backend.manager.websocket.model.PictureEditMessageTypeEnum;
@@ -43,6 +46,9 @@ public class PictureEditHandler extends TextWebSocketHandler {
     @Resource
     @Lazy
     private PictureEditEventProducer pictureEditEventProducer;
+
+    @Resource
+    private EditLeaseService editLeaseService;
 
     // 每张图片的编辑状态，key: pictureId, value: 当前正在编辑的用户 ID
     private final Map<Long, Long> pictureEditingUsers = new ConcurrentHashMap<>();
@@ -106,6 +112,16 @@ public class PictureEditHandler extends TextWebSocketHandler {
             sendError(session, "你可以观看当前工作台，但没有图片编辑权限");
             return;
         }
+        // 统一编辑租约：与 Agent 精修及其他用户的快捷编辑互斥
+        if (editLeaseService.heldByOther(pictureId, AgentConstant.EDIT_LOCK_MODE_QUICK, user.getId(), null)) {
+            JSONObject holder = editLeaseService.get(pictureId);
+            String mode = holder == null ? null : holder.getStr("mode");
+            sendError(session, AgentConstant.EDIT_LOCK_MODE_AGENT.equals(mode)
+                    ? "图片正在进行 Agent 精修，暂时无法进入快捷编辑"
+                    : "图片正在被其他用户编辑，暂时无法进入快捷编辑");
+            return;
+        }
+        editLeaseService.forceAcquire(pictureId, AgentConstant.EDIT_LOCK_MODE_QUICK, user.getId(), null);
         // 没有用户正在编辑该图片，才能进入编辑
         if (pictureEditingUsers.putIfAbsent(pictureId, user.getId()) == null) {
             // 构造响应，发送加入编辑的消息通知
@@ -142,6 +158,8 @@ public class PictureEditHandler extends TextWebSocketHandler {
         }
         // 确认是当前的编辑者
         if (editingUserId != null && editingUserId.equals(user.getId())) {
+            // 编辑动作即视为续租，避免 60 秒 TTL 到期被 Agent 抢占
+            editLeaseService.renew(pictureId, AgentConstant.EDIT_LOCK_MODE_QUICK, user.getId(), null);
             // 构造响应，发送具体操作的通知
             PictureEditResponseMessage pictureEditResponseMessage = new PictureEditResponseMessage();
             pictureEditResponseMessage.setType(PictureEditMessageTypeEnum.EDIT_ACTION.getValue());
@@ -171,6 +189,8 @@ public class PictureEditHandler extends TextWebSocketHandler {
         if (editingUserId != null && editingUserId.equals(user.getId())) {
             // 移除用户正在编辑该图片
             pictureEditingUsers.remove(pictureId);
+            // 释放统一编辑租约
+            editLeaseService.release(pictureId, AgentConstant.EDIT_LOCK_MODE_QUICK, user.getId(), null);
             // 构造响应，发送退出编辑的消息通知
             PictureEditResponseMessage pictureEditResponseMessage = new PictureEditResponseMessage();
             pictureEditResponseMessage.setType(PictureEditMessageTypeEnum.EXIT_EDIT.getValue());
