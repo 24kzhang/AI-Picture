@@ -46,6 +46,15 @@
           <a-button v-if="canEditPicture" :icon="h(EditOutlined)" @click="doBatchEdit">
             批量编辑
           </a-button>
+          <a-button
+            v-if="canEditPicture"
+            type="primary"
+            ghost
+            :icon="h(RobotOutlined)"
+            @click="doAgentBatch"
+          >
+            Agent 批量精修
+          </a-button>
           <a-tooltip
             :title="`占用空间 ${formatSize(space.totalSize)} / ${formatSize(space.maxSize)}`"
           >
@@ -104,10 +113,11 @@ import {
 } from '@/api/pictureController.ts'
 import { formatSize } from '@/utils'
 import PictureList from '@/components/PictureList.vue'
-import { BarChartOutlined, EditOutlined, TeamOutlined } from '@ant-design/icons-vue'
+import { BarChartOutlined, EditOutlined, RobotOutlined, TeamOutlined } from '@ant-design/icons-vue'
 import { SPACE_PERMISSION_ENUM, SPACE_TYPE_MAP } from '../constants/space.ts'
 import PictureSearchForm from '@/components/PictureSearchForm.vue'
 import BatchEditPictureModal from '@/components/BatchEditPictureModal.vue'
+import router from '@/router'
 
 interface Props {
   id: string | number
@@ -265,6 +275,11 @@ const doBatchEdit = () => {
   if (batchEditPictureModalRef.value) {
     batchEditPictureModalRef.value.openModal()
   }
+}
+
+// 进入 Agent 批量精修
+const doAgentBatch = () => {
+  router.push({ path: '/agent/batch', query: { spaceId: String(props.id) } })
 }
 
 // 空间 id 改变时，必须重新获取数据

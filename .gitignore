@@ -116,3 +116,21 @@ coverage
 *.sw?
 
 *.tsbuildinfo
+
+# Local plans and private working notes
+.local/
+
+# Browser and integration test artifacts
+test-results/
+playwright-report/
+allure-results/
+allure-report/
+htmlcov/
+screenshots/
+videos/
+traces/
+*.trace.zip
+.coverage
+
+# 前端本地环境变量（端口等本机差异）
+.env.local

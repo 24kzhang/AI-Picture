@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
   servlet:
     context-path: /api
 
@@ -65,6 +65,26 @@ gallery:
     service-url: ${VECTOR_SERVICE_URL:http://127.0.0.1:18001}
     connect-timeout-ms: ${VECTOR_CONNECT_TIMEOUT_MS:5000}
     read-timeout-ms: ${VECTOR_READ_TIMEOUT_MS:120000}
+  retouch:
+    # Agent 智能精修总开关；关闭后图库主体与快捷编辑不受影响
+    enabled: ${AGENT_EDIT_ENABLED:true}
+    service-url: ${AGENT_SERVICE_URL:http://127.0.0.1:7302}
+    # 与 Agent 侧共享的 HMAC 服务令牌密钥（不少于 32 字节）
+    token-secret: ${AGENT_SERVICE_SECRET:}
+    connect-timeout-ms: ${AGENT_CONNECT_TIMEOUT_MS:5000}
+    read-timeout-ms: ${AGENT_READ_TIMEOUT_MS:60000}
+    outbox:
+      # 集成事务 Outbox 分发开关与轮询间隔
+      enabled: ${AGENT_OUTBOX_ENABLED:true}
+      poll-interval-ms: ${AGENT_OUTBOX_POLL_INTERVAL_MS:5000}
+      initial-delay-ms: ${AGENT_OUTBOX_INITIAL_DELAY_MS:15000}
+    cleanup:
+      # Agent 临时对象（agent-temp/）清理：默认每日 3:30，保留 7 天
+      enabled: ${AGENT_TEMP_CLEANUP_ENABLED:true}
+      retention-days: ${AGENT_TEMP_RETENTION_DAYS:7}
+      cron: ${AGENT_TEMP_CLEANUP_CRON:0 30 3 * * ?}
+    # 浏览器可达的云图库地址（导出下载链接使用）
+    public-base-url: ${GALLERY_PUBLIC_URL:http://localhost:8080}
 
 cos:
   client:

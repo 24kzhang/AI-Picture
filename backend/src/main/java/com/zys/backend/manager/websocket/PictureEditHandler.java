@@ -5,6 +5,7 @@ import cn.hutool.json.JSONUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.module.SimpleModule;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
+import com.zys.backend.manager.lease.EditLeaseService;
 import com.zys.backend.manager.websocket.disruptor.PictureEditEventProducer;
 import com.zys.backend.manager.websocket.model.PictureEditActionEnum;
 import com.zys.backend.manager.websocket.model.PictureEditMessageTypeEnum;
@@ -15,6 +16,7 @@ import com.zys.backend.model.vo.UserVO;
 import com.zys.backend.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -31,7 +33,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 图片编辑 WebSocket 处理器
+ * 图片编辑 WebSocket 处理器。
+ * 编辑锁使用统一 Redis 租约（QUICK 模式），与 Agent 精修互斥。
  */
 @Component
 @Slf4j
@@ -44,8 +47,9 @@ public class PictureEditHandler extends TextWebSocketHandler {
     @Lazy
     private PictureEditEventProducer pictureEditEventProducer;
 
-    // 每张图片的编辑状态，key: pictureId, value: 当前正在编辑的用户 ID
-    private final Map<Long, Long> pictureEditingUsers = new ConcurrentHashMap<>();
+    @Resource
+    @Lazy
+    private EditLeaseService editLeaseService;
 
     // 保存所有连接的会话，key: pictureId, value: 用户会话集合
     private final Map<Long, Set<WebSocketSession>> pictureSessions = new ConcurrentHashMap<>();
@@ -106,8 +110,11 @@ public class PictureEditHandler extends TextWebSocketHandler {
             sendError(session, "你可以观看当前工作台，但没有图片编辑权限");
             return;
         }
-        // 没有用户正在编辑该图片，才能进入编辑
-        if (pictureEditingUsers.putIfAbsent(pictureId, user.getId()) == null) {
+        // 抢占统一编辑租约（QUICK 模式）；被他人或 Agent 持有时只能观看
+        EditLeaseService.Lease lease = editLeaseService.tryAcquire(
+                pictureId, EditLeaseService.MODE_QUICK, user.getId(), session.getId());
+        if (lease != null) {
+            session.getAttributes().put("leaseToken", lease.getLockToken());
             // 构造响应，发送加入编辑的消息通知
             PictureEditResponseMessage pictureEditResponseMessage = new PictureEditResponseMessage();
             pictureEditResponseMessage.setType(PictureEditMessageTypeEnum.ENTER_EDIT.getValue());
@@ -116,6 +123,12 @@ public class PictureEditHandler extends TextWebSocketHandler {
             pictureEditResponseMessage.setUser(userService.getUserVO(user));
             // 广播给所有用户
             broadcastToPicture(pictureId, pictureEditResponseMessage);
+        } else {
+            EditLeaseService.Lease current = editLeaseService.current(pictureId);
+            String reason = current != null && EditLeaseService.MODE_AGENT.equals(current.getMode())
+                    ? "另一位用户正在使用 Agent 精修该图片，你可以观看但不能编辑"
+                    : "另一位用户正在编辑该图片，你可以观看但不能编辑";
+            sendError(session, reason);
         }
     }
 
@@ -132,16 +145,15 @@ public class PictureEditHandler extends TextWebSocketHandler {
             sendError(session, "你可以观看当前工作台，但没有图片编辑权限");
             return;
         }
-        // 正在编辑的用户
-        Long editingUserId = pictureEditingUsers.get(pictureId);
         String editAction = pictureEditRequestMessage.getEditAction();
         PictureEditActionEnum actionEnum = PictureEditActionEnum.getEnumByValue(editAction);
         if (actionEnum == null) {
             log.error("无效的编辑动作");
             return;
         }
-        // 确认是当前的编辑者
-        if (editingUserId != null && editingUserId.equals(user.getId())) {
+        // 确认是当前租约持有者；编辑动作同时作为心跳续租
+        if (editLeaseService.isHeldBy(pictureId, EditLeaseService.MODE_QUICK, user.getId(), session.getId())) {
+            editLeaseService.renewForSession(pictureId, EditLeaseService.MODE_QUICK, user.getId(), session.getId());
             // 构造响应，发送具体操作的通知
             PictureEditResponseMessage pictureEditResponseMessage = new PictureEditResponseMessage();
             pictureEditResponseMessage.setType(PictureEditMessageTypeEnum.EDIT_ACTION.getValue());
@@ -152,6 +164,8 @@ public class PictureEditHandler extends TextWebSocketHandler {
             pictureEditResponseMessage.setUser(userService.getUserVO(user));
             // 广播给除了当前客户端之外的其他用户，否则会造成重复编辑
             broadcastToPicture(pictureId, pictureEditResponseMessage, session);
+        } else {
+            sendError(session, "编辑租约已失效，请重新进入编辑");
         }
     }
 
@@ -165,12 +179,12 @@ public class PictureEditHandler extends TextWebSocketHandler {
      * @param pictureId
      */
     public void handleExitEditMessage(PictureEditRequestMessage pictureEditRequestMessage, WebSocketSession session, User user, Long pictureId) throws IOException {
-        // 正在编辑的用户
-        Long editingUserId = pictureEditingUsers.get(pictureId);
-        // 确认是当前的编辑者
-        if (editingUserId != null && editingUserId.equals(user.getId())) {
-            // 移除用户正在编辑该图片
-            pictureEditingUsers.remove(pictureId);
+        // 确认是当前的编辑者（租约持有者），释放统一编辑租约
+        boolean wasHolder = editLeaseService.isHeldBy(
+                pictureId, EditLeaseService.MODE_QUICK, user.getId(), session.getId());
+        if (wasHolder) {
+            editLeaseService.releaseForSession(
+                    pictureId, EditLeaseService.MODE_QUICK, user.getId(), session.getId());
             // 构造响应，发送退出编辑的消息通知
             PictureEditResponseMessage pictureEditResponseMessage = new PictureEditResponseMessage();
             pictureEditResponseMessage.setType(PictureEditMessageTypeEnum.EXIT_EDIT.getValue());
@@ -235,23 +249,50 @@ public class PictureEditHandler extends TextWebSocketHandler {
     }
 
     /**
-     * 获取当前编辑者，供后加入的观看用户恢复准确状态。
+     * 获取当前编辑者（租约持有者），供后加入的观看用户恢复准确状态。
+     * Agent 精修持有时同样展示持有者，提示图片正在被编辑。
      */
     private UserVO getEditingUser(Long pictureId) {
-        Long editingUserId = pictureEditingUsers.get(pictureId);
-        if (editingUserId == null) {
+        EditLeaseService.Lease lease = editLeaseService.current(pictureId);
+        if (lease == null || lease.getUserId() == null) {
             return null;
         }
         Set<WebSocketSession> sessionSet = pictureSessions.get(pictureId);
         if (CollUtil.isNotEmpty(sessionSet)) {
             for (WebSocketSession session : sessionSet) {
                 User viewer = (User) session.getAttributes().get("user");
-                if (viewer != null && editingUserId.equals(viewer.getId())) {
+                if (viewer != null && lease.getUserId().equals(viewer.getId())) {
                     return userService.getUserVO(viewer);
                 }
             }
         }
-        return null;
+        // 持有者不在当前 WS 会话中（如 Agent 精修）：按用户 id 查询
+        User holder = userService.getById(lease.getUserId());
+        return holder == null ? null : userService.getUserVO(holder);
+    }
+
+    /**
+     * 定时为仍在线的快捷编辑持有者续租（TTL 60 秒，每 20 秒续一次）
+     */
+    @Scheduled(fixedRate = 20000)
+    public void renewQuickLeases() {
+        for (Map.Entry<Long, Set<WebSocketSession>> entry : pictureSessions.entrySet()) {
+            Long pictureId = entry.getKey();
+            try {
+                EditLeaseService.Lease lease = editLeaseService.current(pictureId);
+                if (lease == null || !EditLeaseService.MODE_QUICK.equals(lease.getMode())) {
+                    continue;
+                }
+                for (WebSocketSession session : entry.getValue()) {
+                    if (session.isOpen() && session.getId().equals(lease.getSessionId())) {
+                        editLeaseService.renew(pictureId, lease.getLockToken());
+                        break;
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("快捷编辑租约续租失败，pictureId={}：{}", pictureId, e.getMessage());
+            }
+        }
     }
 
     private void sendError(WebSocketSession session, String message) throws IOException {
