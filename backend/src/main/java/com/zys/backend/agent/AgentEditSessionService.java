@@ -91,10 +91,14 @@ public class AgentEditSessionService {
             idemValue = stringRedisTemplate.opsForValue().get(idempotencyKeyOf(loginUser.getId(), idempotencyKey));
             if (idemValue != null) {
                 PictureEditSession existing = editSessionMapper.selectById(Long.parseLong(idemValue));
-                if (existing != null) {
+                if (existing != null && !PictureEditSessionStatusEnum.EXPIRED.getValue().equals(existing.getStatus())) {
                     editLeaseService.tryAcquire(pictureId, EditLeaseService.MODE_AGENT,
                             loginUser.getId(), String.valueOf(existing.getId()));
-                    return buildSessionVO(existing, loginUser, false);
+                    try {
+                        return buildSessionVO(existing, loginUser, false);
+                    } catch (BusinessException e) {
+                        markExpiredIfMissing(existing, e);
+                    }
                 }
             }
         }
@@ -104,7 +108,11 @@ public class AgentEditSessionService {
         if (active != null) {
             editLeaseService.tryAcquire(pictureId, EditLeaseService.MODE_AGENT,
                     loginUser.getId(), String.valueOf(active.getId()));
-            return rememberIdempotency(active, idempotencyKey, loginUser.getId());
+            try {
+                return rememberIdempotency(active, idempotencyKey, loginUser.getId());
+            } catch (BusinessException e) {
+                markExpiredIfMissing(active, e);
+            }
         }
 
         // 先落 DRAFT 会话记录（拿到会话 id 作为租约身份），再抢统一编辑租约
@@ -215,6 +223,22 @@ public class AgentEditSessionService {
             throw new BusinessException(ErrorCode.OPERATION_ERROR,
                     "编辑租约已失效，结果仅保留为草稿，请重新进入工作台");
         }
+    }
+
+    /**
+     * Agent 侧会话已不存在时作废本地会话（下次进入将自动新建）；其他错误继续抛出
+     */
+    private void markExpiredIfMissing(PictureEditSession record, BusinessException error) {
+        if (error.getCode() != ErrorCode.NOT_FOUND_ERROR.getCode()) {
+            throw error;
+        }
+        record.setStatus(PictureEditSessionStatusEnum.EXPIRED.getValue());
+        record.setUpdateTime(new Date());
+        editSessionMapper.updateById(record);
+        editLeaseService.releaseForSession(record.getPictureId(), EditLeaseService.MODE_AGENT,
+                record.getUserId(), String.valueOf(record.getId()));
+        log.warn("Agent 侧会话已不存在，作废本地会话：id={}，agentSessionId={}",
+                record.getId(), record.getAgentSessionId());
     }
 
     /**
@@ -439,7 +463,11 @@ public class AgentEditSessionService {
             return;
         }
         run.setStatus(live.getStatus());
-        run.setProgress(live.getProgress());
+        Integer progress = live.getProgress();
+        if ("succeeded".equals(live.getStatus()) && (progress == null || progress < 100)) {
+            progress = 100;
+        }
+        run.setProgress(progress);
         run.setStage(live.getStage());
         run.setErrorMessage(live.getError());
         run.setUpdateTime(new Date());
@@ -502,6 +530,11 @@ public class AgentEditSessionService {
                 vo.setTurns(turnVOs);
             }
         } catch (BusinessException e) {
+            // 会话在 Agent 侧已不存在：向上抛出，由调用方作废并新建
+            if (e.getCode() == ErrorCode.NOT_FOUND_ERROR.getCode()) {
+                throw e;
+            }
+            // 其他错误（Agent 暂时不可用等）：只读场景直接失败，所有者返回本地骨架
             if (readOnly) {
                 throw e;
             }

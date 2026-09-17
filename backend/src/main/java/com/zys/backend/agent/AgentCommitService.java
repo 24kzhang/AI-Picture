@@ -345,7 +345,7 @@ public class AgentCommitService {
                                                             long versionNo) {
         Path tempFile = null;
         try {
-            tempFile = downloadToTemp(resolveServerSideUrl(assetUrl));
+            tempFile = materializeOrDownload(resolveServerSideUrl(assetUrl));
             String prefix = String.format("pictures/%s/%d/versions/%d",
                     picture.getSpaceId() == null ? "public" : String.valueOf(picture.getSpaceId()),
                     picture.getId(), versionNo);
@@ -358,6 +358,21 @@ public class AgentCommitService {
                 }
             }
         }
+    }
+
+    /**
+     * 优先通过存储层物化（历史本地文件、COS 对象），失败再走 HTTP 下载。
+     * 这样恢复旧版本时不依赖历史 URL 的可达性（例如旧的本地存储地址）。
+     */
+    private Path materializeOrDownload(String url) {
+        try (CosStorageManager.ManagedImageFile file = cosStorageManager.materialize(url)) {
+            Path copy = Files.createTempFile("agent-version-", ".img");
+            Files.copy(file.getPath(), copy, StandardCopyOption.REPLACE_EXISTING);
+            return copy;
+        } catch (Exception e) {
+            log.debug("存储层物化失败，改用 HTTP 下载：{}（{}）", url, e.getMessage());
+        }
+        return downloadToTemp(url);
     }
 
     /**
