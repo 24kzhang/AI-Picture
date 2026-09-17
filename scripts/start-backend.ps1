@@ -89,7 +89,7 @@ if (Test-Port -Port $backendPort) {
 $wrapper = Join-Path $projectRoot 'runtime-data\run-backend.ps1'
 $envNames = @('SPRING_PROFILES_ACTIVE', 'SERVER_PORT', 'DB_URL', 'DB_USERNAME', 'DB_PASSWORD',
     'REDIS_HOST', 'REDIS_PORT', 'REDIS_DATABASE', 'REDIS_PASSWORD',
-    'VECTOR_SERVICE_URL', 'ALIYUN_AI_API_KEY',
+    'VECTOR_SERVICE_URL', 'ALIYUN_AI_API_KEY', 'GALLERY_PUBLIC_URL', 'GALLERY_PUBLIC_BASE_URL',
     'AGENT_EDIT_ENABLED', 'AGENT_SERVICE_URL', 'AGENT_SERVICE_SECRET')
 $lines = @('# 由 start-backend.ps1 自动生成：设置环境变量并前台运行 Spring Boot（进程本身分离启动）')
 foreach ($name in $envNames) {

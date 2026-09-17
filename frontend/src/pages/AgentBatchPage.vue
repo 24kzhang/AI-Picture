@@ -187,7 +187,7 @@ async function loadSpaces() {
   if (!loginUserStore.loginUser?.id) {
     await loginUserStore.fetchLoginUser()
   }
-  const res = await listSpaceVoByPageUsingPost({ current: 1, pageSize: 50 })
+  const res = await listSpaceVoByPageUsingPost({ current: 1, pageSize: 20 })
   if (res.data.code === 0 && res.data.data?.records) {
     spaces.value = res.data.data.records.filter(
       (space) => String(space.userId) === String(loginUserStore.loginUser?.id),
@@ -206,7 +206,7 @@ async function loadPictures() {
   try {
     const res = await listPictureVoByPageUsingPost({
       current: 1,
-      pageSize: 60,
+      pageSize: 20,
       spaceId: String(spaceId.value),
     })
     pictures.value = res.data.code === 0 ? (res.data.data?.records ?? []) : []

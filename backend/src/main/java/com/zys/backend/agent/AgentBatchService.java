@@ -126,7 +126,15 @@ public class AgentBatchService {
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("asset_ids", assetIds);
-        payload.put("operations", request.getOperations());
+        // Agent 批量接口要求 operations 为 [{tool, params}] 结构
+        List<Map<String, Object>> operations = new ArrayList<>();
+        for (String operation : request.getOperations()) {
+            Map<String, Object> operationPayload = new HashMap<>();
+            operationPayload.put("tool", operation);
+            operationPayload.put("params", new HashMap<String, Object>());
+            operations.add(operationPayload);
+        }
+        payload.put("operations", operations);
         payload.put("formats", formats.split(","));
         AgentRunDTO run = agentClient.createBatch(payload, context);
         ThrowUtils.throwIf(run == null || run.getId() == null,

@@ -282,14 +282,25 @@ public class RetouchAgentClient {
     }
 
     /**
-     * 下载批量任务产物 ZIP
+     * 下载批量任务产物 ZIP（Agent 侧为 GET）
      */
     public byte[] exportBatch(String batchRunId, AgentCallContext context) {
-        return download("/api/batches/" + batchRunId + "/export", context);
+        try {
+            HttpEntity<Void> entity = new HttpEntity<>(authHeaders(context));
+            ResponseEntity<byte[]> response = restTemplate.exchange(
+                    serviceUrl + "/api/batches/" + batchRunId + "/export",
+                    HttpMethod.GET, entity, byte[].class);
+            byte[] body = response.getBody();
+            return body == null ? new byte[0] : body;
+        } catch (RestClientResponseException e) {
+            throw wrapAgentError(e);
+        } catch (ResourceAccessException e) {
+            throw unavailable();
+        }
     }
 
     /**
-     * 下载会话导出 ZIP
+     * 下载会话导出 ZIP（Agent 侧为 POST，携带 asset_ids）
      */
     public byte[] exportSession(String agentSessionId, Map<String, Object> payload, AgentCallContext context) {
         return download("/api/sessions/" + agentSessionId + "/exports", context, payload);
