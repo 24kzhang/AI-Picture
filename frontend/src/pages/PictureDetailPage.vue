@@ -89,6 +89,15 @@
               <a-button v-if="canEdit" :icon="h(EditOutlined)" type="default" @click="doEdit">
                 编辑
               </a-button>
+              <a-button
+                v-if="canEdit"
+                :icon="h(RobotOutlined)"
+                type="primary"
+                ghost
+                @click="doAgentEdit"
+              >
+                Agent 精修
+              </a-button>
               <a-button v-if="canDelete" :icon="h(DeleteOutlined)" danger @click="doDelete">
                 删除
               </a-button>
@@ -111,6 +120,7 @@ import {
   DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
+  RobotOutlined,
   SearchOutlined,
   ShareAltOutlined,
 } from '@ant-design/icons-vue'
@@ -197,6 +207,15 @@ const doEdit = () => {
     path: '/add_picture',
     query: {
       id: picture.value.id,
+      spaceId: picture.value.spaceId,
+    },
+  })
+}
+// 进入 Agent 精修工作台
+const doAgentEdit = () => {
+  router.push({
+    path: `/agent/picture/${picture.value.id}`,
+    query: {
       spaceId: picture.value.spaceId,
     },
   })

@@ -51,6 +51,12 @@ const router = createRouter({
       props: true,
     },
     {
+      path: '/agent/picture/:pictureId',
+      name: 'Agent 精修工作台',
+      component: () => import('@/pages/AgentWorkbenchPage.vue'),
+      props: true,
+    },
+    {
       path: '/add_picture/batch',
       name: '批量创建图片',
       component: AddPictureBatchPage,
