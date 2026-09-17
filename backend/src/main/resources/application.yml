@@ -78,3 +78,14 @@ cos:
 aliYunAi:
   apiKey: ${ALIYUN_AI_API_KEY:}
   imageEditModel: ${ALIYUN_IMAGE_EDIT_MODEL:qwen-image-2.0-pro}
+
+# Java 原生修图 Agent
+agent:
+  planner:
+    baseUrl: ${AGENT_PLANNER_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    apiKey: ${AGENT_PLANNER_API_KEY:${aliYunAi.apiKey:}}
+    model: ${AGENT_PLANNER_MODEL:qwen-plus}
+    timeoutMs: ${AGENT_PLANNER_TIMEOUT_MS:120000}
+  image:
+    # auto: 配置了 AI Key 走 DashScope，否则走 Mock；也可强制 dashscope/mock
+    provider: ${AGENT_IMAGE_PROVIDER:auto}
