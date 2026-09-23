@@ -17,6 +17,7 @@ import com.zys.backend.model.entity.PictureEditSession;
 import com.zys.backend.model.entity.User;
 import com.zys.backend.model.enums.AgentAssetKindEnum;
 import com.zys.backend.service.UserService;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
@@ -47,6 +48,7 @@ public class BatchTools extends SessionToolBase implements AgentTool {
     private AgentAuthService agentAuthService;
 
     @Resource
+    @Lazy
     private ToolRegistry toolRegistry;
 
     @Override
