@@ -1,12 +1,18 @@
 package com.zys.backend.manager.websocket;
 
 import cn.hutool.json.JSONUtil;
+import cn.hutool.json.JSONObject;
+import com.zys.backend.agent.service.EditLeaseService;
+import com.zys.backend.constant.AgentConstant;
 import com.zys.backend.manager.websocket.model.PictureEditActionEnum;
 import com.zys.backend.manager.websocket.model.PictureEditRequestMessage;
 import com.zys.backend.manager.websocket.model.PictureEditResponseMessage;
+import com.zys.backend.model.entity.User;
 import com.zys.backend.model.vo.UserVO;
+import com.zys.backend.service.UserService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 
@@ -19,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -79,5 +86,31 @@ class PictureEditProtocolTest {
         String payload = messageCaptor.getValue().getPayload();
         assertTrue(payload.contains("ERROR"));
         assertTrue(payload.contains("没有图片编辑权限"));
+    }
+
+    @Test
+    void shouldRejectQuickEditWhenAgentLeaseIsHeld() throws Exception {
+        PictureEditHandler handler = new PictureEditHandler();
+        EditLeaseService leaseService = mock(EditLeaseService.class);
+        UserService userService = mock(UserService.class);
+        ReflectionTestUtils.setField(handler, "editLeaseService", leaseService);
+        ReflectionTestUtils.setField(handler, "userService", userService);
+
+        WebSocketSession session = mock(WebSocketSession.class);
+        when(session.getAttributes()).thenReturn(Collections.singletonMap("canEdit", true));
+        when(session.isOpen()).thenReturn(true);
+        User user = new User();
+        user.setId(7L);
+        user.setUserName("Alice");
+        when(leaseService.heldByOther(1001L, AgentConstant.EDIT_LOCK_MODE_QUICK, 7L, null))
+                .thenReturn(true);
+        when(leaseService.get(1001L)).thenReturn(new JSONObject().set("mode", AgentConstant.EDIT_LOCK_MODE_AGENT));
+
+        handler.handleEnterEditMessage(null, session, user, 1001L);
+
+        ArgumentCaptor<TextMessage> messageCaptor = ArgumentCaptor.forClass(TextMessage.class);
+        verify(session).sendMessage(messageCaptor.capture());
+        assertTrue(messageCaptor.getValue().getPayload().contains("Agent 精修"));
+        verify(leaseService, never()).forceAcquire(1001L, AgentConstant.EDIT_LOCK_MODE_QUICK, 7L, null);
     }
 }
