@@ -61,6 +61,11 @@ public class QwenImageEditor {
         return response;
     }
 
+    /** 兼容旧调用方，密钥和模型参数不再参与服务器接口调用。 */
+    public CreateOutPaintingTaskResponse submit(String apiKey, String model, String imageUrl, String prompt) {
+        return submit(imageUrl, prompt);
+    }
+
     public GetOutPaintingTaskResponse getTask(String taskId) {
         GetOutPaintingTaskResponse response = tasks.getIfPresent(taskId);
         if (response != null) {

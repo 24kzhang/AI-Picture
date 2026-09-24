@@ -12,12 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.Resource;
-import javax.imageio.ImageIO;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -63,31 +57,18 @@ public class DashScopeAgentImageProvider implements AgentImageProvider {
 
     @Override
     public byte[] upscale(byte[] image, int scale, ProgressReporter reporter) {
-        // DashScope 当前接入通道无独立超分任务，使用高质量双线性放大兜底
-        reportQuietly(reporter, 40, "提升分辨率");
-        try {
-            BufferedImage source = ImageIO.read(new ByteArrayInputStream(image));
-            if (source == null) {
-                throw new AgentToolException("图片解码失败");
-            }
-            int factor = scale < 2 ? 2 : Math.min(scale, 4);
-            int width = source.getWidth() * factor;
-            int height = source.getHeight() * factor;
-            BufferedImage target = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-            Graphics2D graphics = target.createGraphics();
-            graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
-            graphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-            graphics.drawImage(source, 0, 0, width, height, null);
-            graphics.dispose();
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            ImageIO.write(target, "png", output);
-            reportQuietly(reporter, 90, "完成");
-            return output.toByteArray();
-        } catch (AgentToolException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new AgentToolException("超分失败", e);
+        reportQuietly(reporter, 30, "提交超分任务");
+        int factor = scale < 2 ? 2 : Math.min(scale, 4);
+        EditImageRequest request = new EditImageRequest()
+                .setImage(image)
+                .setPrompt("将图片进行高质量超分辨率重建，放大 " + factor + " 倍，保留原图主体、构图、颜色和细节，不添加新内容")
+                .setCount(1);
+        List<byte[]> results = edit(request, reporter);
+        if (results.isEmpty()) {
+            throw new AgentToolException("超分未返回图片");
         }
+        reportQuietly(reporter, 95, "完成");
+        return results.get(0);
     }
 
     private byte[] runEditTask(String imageUrl, String prompt, Double strength, ProgressReporter reporter) {
