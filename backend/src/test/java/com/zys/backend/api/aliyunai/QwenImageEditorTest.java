@@ -1,7 +1,5 @@
 package com.zys.backend.api.aliyunai;
 
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
 import com.sun.net.httpserver.HttpServer;
 import com.zys.backend.api.aliyunai.model.GetOutPaintingTaskResponse;
 import org.junit.jupiter.api.AfterEach;
@@ -23,12 +21,12 @@ class QwenImageEditorTest {
     private final AtomicReference<String> request = new AtomicReference<>();
     private final AtomicReference<String> asyncHeader = new AtomicReference<>();
     private int status = 200;
-    private String body = "{\"request_id\":\"test-request\",\"output\":{\"choices\":[{\"message\":{\"content\":[{\"image\":\"https://example.com/result.png\"}]}}]}}";
+    private String body = "{\"url\":\"/qwen-image/outputs/result.png\"}";
 
     @BeforeEach
     void setUp() throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
-        server.createContext("/edit", exchange -> {
+        server.createContext("/qwen-image/api/edit", exchange -> {
             try (Scanner scanner = new Scanner(exchange.getRequestBody(), "UTF-8")) {
                 request.set(scanner.useDelimiter("\\A").next());
             }
@@ -39,9 +37,15 @@ class QwenImageEditorTest {
             exchange.getResponseBody().write(bytes);
             exchange.close();
         });
+        server.createContext("/source", exchange -> {
+            byte[] bytes = "PNG".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
         server.start();
         editor = new QwenImageEditor();
-        ReflectionTestUtils.setField(editor, "endpoint", "http://127.0.0.1:" + server.getAddress().getPort() + "/edit");
+        ReflectionTestUtils.setField(editor, "baseUrl", "http://127.0.0.1:" + server.getAddress().getPort());
     }
 
     @AfterEach
@@ -51,7 +55,7 @@ class QwenImageEditorTest {
     }
 
     private GetOutPaintingTaskResponse runTask() throws Exception {
-        String id = editor.submit("test-key", "qwen-image-2.0-pro", "https://example.com/source.png", "替换为日落海滩").getOutput().getTaskId();
+        String id = editor.submit("http://127.0.0.1:" + server.getAddress().getPort() + "/source", "替换为日落海滩").getOutput().getTaskId();
         assertTrue(id.startsWith(QwenImageEditor.TASK_PREFIX));
         for (int i = 0; i < 200; i++) {
             GetOutPaintingTaskResponse response = editor.getTask(id);
@@ -67,15 +71,9 @@ class QwenImageEditorTest {
     void preservesPromptAndAdaptsSuccessfulResult() throws Exception {
         GetOutPaintingTaskResponse result = runTask();
         assertEquals("SUCCEEDED", result.getOutput().getTaskStatus());
-        assertEquals("https://example.com/result.png", result.getOutput().getResults().get(0).getUrl());
-        assertEquals("test-request", result.getRequestId());
-        JSONObject sent = JSONUtil.parseObj(request.get());
-        assertEquals("qwen-image-2.0-pro", sent.getStr("model"));
-        JSONObject message = sent.getJSONObject("input").getJSONArray("messages").getJSONObject(0);
-        assertEquals("https://example.com/source.png", message.getJSONArray("content").getJSONObject(0).getStr("image"));
-        assertEquals("替换为日落海滩", message.getJSONArray("content").getJSONObject(1).getStr("text"));
-        assertFalse(sent.getJSONObject("parameters").getBool("prompt_extend"));
-        assertFalse(sent.getJSONObject("parameters").containsKey("strength"));
+        assertEquals("http://127.0.0.1:" + server.getAddress().getPort() + "/qwen-image/outputs/result.png", result.getOutput().getResults().get(0).getUrl());
+        assertNull(result.getRequestId());
+        assertTrue(request.get().contains("替换为日落海滩"));
         assertNull(asyncHeader.get());
     }
 
@@ -85,7 +83,7 @@ class QwenImageEditorTest {
         body = "{\"code\":\"AccessDenied\",\"message\":\"private-provider-detail\"}";
         GetOutPaintingTaskResponse result = runTask();
         assertEquals("FAILED", result.getOutput().getTaskStatus());
-        assertTrue(result.getOutput().getMessage().contains("AccessDenied"));
+        assertTrue(result.getOutput().getMessage().contains("HTTP 403"));
         assertFalse(result.getOutput().getMessage().contains("private-provider-detail"));
     }
 

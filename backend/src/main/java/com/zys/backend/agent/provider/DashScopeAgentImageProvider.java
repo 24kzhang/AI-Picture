@@ -23,7 +23,7 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * DashScope 真实图像编辑 Provider：临时上传原图 → 签名短链 → 异步任务 → 轮询 → 下载结果。
+ * Qwen-Image 服务器图像编辑 Provider：临时上传原图 → 签名短链 → 调用服务器接口 → 下载结果。
  * 模型不接触长期有效的 COS 私密地址。
  */
 @Slf4j
@@ -42,7 +42,7 @@ public class DashScopeAgentImageProvider implements AgentImageProvider {
 
     @Override
     public String name() {
-        return "dashscope";
+        return "qwen-image-server";
     }
 
     @Override

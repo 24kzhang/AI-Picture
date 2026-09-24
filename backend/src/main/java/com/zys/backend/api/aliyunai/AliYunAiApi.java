@@ -49,27 +49,15 @@ public class AliYunAiApi {
         if (createOutPaintingTaskRequest == null) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "扩图参数为空");
         }
-        // 发送请求
-        HttpRequest httpRequest = HttpRequest.post(CREATE_OUT_PAINTING_TASK_URL)
-                .header("Authorization", "Bearer " + apiKey)
-                // 必须开启异步处理
-                .header("X-DashScope-Async", "enable")
-                .header("Content-Type", "application/json")
-                .body(JSONUtil.toJsonStr(createOutPaintingTaskRequest));
-        // 处理响应
-        try (HttpResponse httpResponse = httpRequest.execute()) {
-            if (!httpResponse.isOk()) {
-                log.error("请求异常：{}", httpResponse.body());
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 扩图失败");
-            }
-            CreateOutPaintingTaskResponse createOutPaintingTaskResponse = JSONUtil.toBean(httpResponse.body(), CreateOutPaintingTaskResponse.class);
-            if (createOutPaintingTaskResponse.getCode() != null) {
-                String errorMessage = createOutPaintingTaskResponse.getMessage();
-                log.error("请求异常：{}", errorMessage);
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 扩图失败，" + errorMessage);
-            }
-            return createOutPaintingTaskResponse;
+        CreateOutPaintingTaskRequest.Input input = createOutPaintingTaskRequest.getInput();
+        if (input == null || StrUtil.isBlank(input.getImageUrl())) {
+            throw new BusinessException(ErrorCode.PARAMS_ERROR, "待编辑图片地址不能为空");
         }
+        String prompt = "扩展图片画布，保持主体和风格自然一致";
+        if (createOutPaintingTaskRequest.getParameters() != null) {
+            prompt += "，生成完整自然的背景";
+        }
+        return qwenImageEditor.submit(input.getImageUrl(), prompt);
     }
 
 
@@ -77,9 +65,6 @@ public class AliYunAiApi {
      * 创建自然语言图片编辑任务
      */
     public CreateOutPaintingTaskResponse createImageEditTask(String imageUrl, String prompt, Double strength) {
-        if (StrUtil.isBlank(apiKey)) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "未配置阿里云百炼 API Key");
-        }
         if (StrUtil.isBlank(imageUrl)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "待编辑图片地址不能为空");
         }
@@ -91,40 +76,7 @@ public class AliYunAiApi {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "编辑强度需在 0 到 1 之间");
         }
 
-        if (imageEditModel.startsWith("qwen-image-")) {
-            return qwenImageEditor.submit(apiKey, imageEditModel, imageUrl, prompt.trim());
-        }
-
-        JSONObject input = JSONUtil.createObj()
-                .set("function", "description_edit")
-                .set("prompt", prompt.trim())
-                .set("base_image_url", imageUrl);
-        JSONObject parameters = JSONUtil.createObj()
-                .set("n", 1)
-                .set("watermark", false)
-                .set("strength", editStrength);
-        JSONObject requestBody = JSONUtil.createObj()
-                .set("model", imageEditModel)
-                .set("input", input)
-                .set("parameters", parameters);
-
-        HttpRequest httpRequest = HttpRequest.post(CREATE_IMAGE_EDIT_TASK_URL)
-                .header("Authorization", "Bearer " + apiKey)
-                .header("X-DashScope-Async", "enable")
-                .header("Content-Type", "application/json")
-                .body(requestBody.toString());
-        try (HttpResponse httpResponse = httpRequest.execute()) {
-            if (!httpResponse.isOk()) {
-                log.error("AI 图片编辑请求异常：{}", httpResponse.body());
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 图片编辑任务创建失败");
-            }
-            CreateOutPaintingTaskResponse response = JSONUtil.toBean(httpResponse.body(), CreateOutPaintingTaskResponse.class);
-            if (StrUtil.isNotBlank(response.getCode())) {
-                log.error("AI 图片编辑请求异常：{}", response.getMessage());
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 图片编辑任务创建失败，" + response.getMessage());
-            }
-            return response;
-        }
+        return qwenImageEditor.submit(imageUrl, prompt.trim());
     }
     /**
      * 查询创建的任务结果

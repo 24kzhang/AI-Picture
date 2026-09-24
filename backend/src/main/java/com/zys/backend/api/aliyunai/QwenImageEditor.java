@@ -3,7 +3,6 @@ package com.zys.backend.api.aliyunai;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
-import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.github.benmanes.caffeine.cache.Cache;
@@ -33,8 +32,8 @@ import java.util.concurrent.TimeUnit;
 public class QwenImageEditor {
     static final String TASK_PREFIX = "qwen-local-";
 
-    @Value("${aliYunAi.imageEditUrl:https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation}")
-    private String endpoint;
+    @Value("${qwenImage.baseUrl:http://172.18.20.44:30066}")
+    private String baseUrl;
 
     private final Cache<String, GetOutPaintingTaskResponse> tasks = Caffeine.newBuilder()
             .maximumSize(128).expireAfterWrite(24, TimeUnit.HOURS).build();
@@ -45,11 +44,11 @@ public class QwenImageEditor {
                 return thread;
             }, new ThreadPoolExecutor.AbortPolicy());
 
-    public CreateOutPaintingTaskResponse submit(String apiKey, String model, String imageUrl, String prompt) {
+    public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt) {
         String taskId = TASK_PREFIX + UUID.randomUUID();
         tasks.put(taskId, state(taskId, "PENDING"));
         try {
-            executor.execute(() -> generate(taskId, apiKey, model, imageUrl, prompt));
+            executor.execute(() -> generate(taskId, imageUrl, prompt));
         } catch (RejectedExecutionException e) {
             tasks.invalidate(taskId);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 编辑任务较多，请稍后重试");
@@ -72,60 +71,47 @@ public class QwenImageEditor {
         return response;
     }
 
-    private void generate(String taskId, String apiKey, String model, String imageUrl, String prompt) {
+    private void generate(String taskId, String imageUrl, String prompt) {
         tasks.put(taskId, state(taskId, "RUNNING"));
-        // 千问不接受旧版万相的 strength 参数，直接遵循原始指令，不做自动改写。
-        JSONObject message = JSONUtil.createObj().set("role", "user").set("content", JSONUtil.createArray()
-                .put(JSONUtil.createObj().set("image", imageUrl))
-                .put(JSONUtil.createObj().set("text", prompt)));
-        JSONObject body = JSONUtil.createObj().set("model", model)
-                .set("input", JSONUtil.createObj().set("messages", JSONUtil.createArray().put(message)))
-                .set("parameters", JSONUtil.createObj().set("n", 1).set("watermark", false)
-                        .set("prompt_extend", false));
-        try (HttpResponse http = HttpRequest.post(endpoint)
-                .header("Authorization", "Bearer " + apiKey).header("Content-Type", "application/json")
-                .timeout(180000).body(body.toString()).execute()) {
-            JSONObject result = JSONUtil.parseObj(http.body());
-            if (!http.isOk() || StrUtil.isNotBlank(result.getStr("code"))) {
-                // 不记录密钥、完整请求或带签名的图片链接。
-                log.warn("千问编辑失败，状态码={}，错误码={}，请求标识={}",
-                        http.getStatus(), result.getStr("code"), result.getStr("request_id"));
-                fail(taskId, "模型请求失败，请检查模型权限、额度和密钥（"
-                        + result.getStr("code", "HTTP " + http.getStatus()) + "）");
-                return;
+        try {
+            byte[] source;
+            try (HttpResponse input = HttpRequest.get(imageUrl).timeout(30000).execute()) {
+                if (!input.isOk()) {
+                    fail(taskId, "读取原图失败（HTTP " + input.getStatus() + "）");
+                    return;
+                }
+                source = input.bodyBytes();
             }
-            String url = imageUrl(result);
-            if (StrUtil.isBlank(url)) {
-                fail(taskId, "模型未返回可用图片，请重新生成");
-                return;
+            try (HttpResponse http = HttpRequest.post(baseUrl + "/qwen-image/api/edit")
+                    .form("image", source, "input.png")
+                    .form("prompt", prompt)
+                    .form("steps", 30)
+                    .form("guidance_scale", 4)
+                    .timeout(1800000).execute()) {
+                if (!http.isOk()) {
+                    log.warn("Qwen Image 编辑失败，状态码={}", http.getStatus());
+                    fail(taskId, "模型请求失败（HTTP " + http.getStatus() + "）");
+                    return;
+                }
+                JSONObject result = JSONUtil.parseObj(http.body());
+                String path = result.getStr("url");
+                if (StrUtil.isBlank(path) || !path.matches("/qwen-image/outputs/[A-Za-z0-9_-]+\\.png")) {
+                    fail(taskId, "模型未返回有效图片地址");
+                    return;
+                }
+                String url = baseUrl.replaceAll("/+$", "") + path;
+                GetOutPaintingTaskResponse response = state(taskId, "SUCCEEDED");
+                GetOutPaintingTaskResponse.Result image = new GetOutPaintingTaskResponse.Result();
+                image.setUrl(url);
+                response.getOutput().setResults(Collections.singletonList(image));
+                response.getOutput().setOutputImageUrl(url);
+                response.setRequestId(result.getStr("id"));
+                tasks.put(taskId, response);
             }
-            GetOutPaintingTaskResponse response = state(taskId, "SUCCEEDED");
-            GetOutPaintingTaskResponse.Result image = new GetOutPaintingTaskResponse.Result();
-            image.setUrl(url);
-            response.getOutput().setResults(Collections.singletonList(image));
-            response.getOutput().setOutputImageUrl(url);
-            response.setRequestId(result.getStr("request_id"));
-            tasks.put(taskId, response);
         } catch (Exception e) {
             log.warn("千问编辑请求未完成，异常类型={}", e.getClass().getSimpleName());
             fail(taskId, "模型连接失败或等待超时，请稍后重试");
         }
-    }
-
-    private String imageUrl(JSONObject result) {
-        JSONObject output = result.getJSONObject("output");
-        JSONArray choices = output == null ? null : output.getJSONArray("choices");
-        if (choices == null) return null;
-        for (int i = 0; i < choices.size(); i++) {
-            JSONObject message = choices.getJSONObject(i).getJSONObject("message");
-            JSONArray content = message == null ? null : message.getJSONArray("content");
-            if (content == null) continue;
-            for (int j = 0; j < content.size(); j++) {
-                String url = content.getJSONObject(j).getStr("image");
-                if (StrUtil.isNotBlank(url)) return url;
-            }
-        }
-        return null;
     }
 
     private GetOutPaintingTaskResponse state(String taskId, String status) {

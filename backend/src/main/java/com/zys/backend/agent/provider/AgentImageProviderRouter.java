@@ -10,8 +10,8 @@ import javax.annotation.Resource;
 import java.util.List;
 
 /**
- * Provider 路由：auto 模式下配置了 AI Key 走 DashScope，否则走 Mock；
- * 也可通过 agent.image.provider=dashscope|mock 强制指定。
+ * Provider 路由：auto 模式使用服务器部署的 Qwen-Image；mock 仅用于本地演示。
+ * 兼容旧配置中的 dashscope 值，但实际请求同样进入 Qwen-Image 服务器。
  */
 @Slf4j
 @Component
@@ -37,10 +37,10 @@ public class AgentImageProviderRouter implements AgentImageProvider {
         if ("mock".equals(mode)) {
             return mockProvider;
         }
-        if ("dashscope".equals(mode)) {
+        if ("dashscope".equals(mode) || "qwen-server".equals(mode) || "qwen-image-server".equals(mode)) {
             return dashScopeProvider;
         }
-        return StrUtil.isNotBlank(aiApiKey) ? dashScopeProvider : mockProvider;
+        return dashScopeProvider;
     }
 
     @Override
