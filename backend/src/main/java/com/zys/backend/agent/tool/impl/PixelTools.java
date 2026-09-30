@@ -51,8 +51,9 @@ public class PixelTools extends SessionToolBase implements AgentTool {
         byte[] source = layerBytes(session, layer);
         ctx.report(40, "去除背景");
         EditImageRequest request = new EditImageRequest()
-                .setPrompt("去掉背景，只保留画面主体，背景区域填充纯白色，主体边缘保持干净完整")
+                .setPrompt("This is an RGBA image with transparency. 去掉背景，只保留画面主体，背景必须完全透明，主体边缘保持干净完整，不要生成白色背景或棋盘格。")
                 .setImage(source)
+                .setKeepAlpha(false)
                 .setCount(1);
         List<byte[]> outputs = imageProvider.edit(request, ctx.getReporter());
         if (outputs == null || outputs.isEmpty()) {

@@ -55,7 +55,11 @@ class QwenImageEditorTest {
     }
 
     private GetOutPaintingTaskResponse runTask() throws Exception {
-        String id = editor.submit("http://127.0.0.1:" + server.getAddress().getPort() + "/source", "替换为日落海滩").getOutput().getTaskId();
+        return runTask(true);
+    }
+
+    private GetOutPaintingTaskResponse runTask(boolean keepAlpha) throws Exception {
+        String id = editor.submit("http://127.0.0.1:" + server.getAddress().getPort() + "/source", "替换为日落海滩", null, keepAlpha).getOutput().getTaskId();
         assertTrue(id.startsWith(QwenImageEditor.TASK_PREFIX));
         for (int i = 0; i < 200; i++) {
             GetOutPaintingTaskResponse response = editor.getTask(id);
@@ -75,6 +79,16 @@ class QwenImageEditorTest {
         assertNull(result.getRequestId());
         assertTrue(request.get().contains("替换为日落海滩"));
         assertNull(asyncHeader.get());
+        assertTrue(request.get().contains("name=\"keep_alpha\"\r\n\r\ntrue"));
+        assertTrue(editor.isGeneratedOutputUrl(result.getOutput().getOutputImageUrl()));
+        assertFalse(editor.isGeneratedOutputUrl(result.getOutput().getOutputImageUrl() + "?redirect=1"));
+        assertFalse(editor.isGeneratedOutputUrl("http://127.0.0.1/secret"));
+    }
+
+    @Test
+    void allowsModelToRebuildAlphaForTransparentOutput() throws Exception {
+        assertEquals("SUCCEEDED", runTask(false).getOutput().getTaskStatus());
+        assertTrue(request.get().contains("name=\"keep_alpha\"\r\n\r\nfalse"));
     }
 
     @Test

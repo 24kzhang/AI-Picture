@@ -98,6 +98,9 @@ public class RegionTools extends SessionToolBase implements AgentTool {
                 .setPrompt(prompt)
                 .setImage(source)
                 .setCount(1);
+        if (mask != null) {
+            request.setMask(assetService.loadBytes(mask));
+        }
         List<byte[]> outputs = imageProvider.edit(request, ctx.getReporter());
         if (outputs == null || outputs.isEmpty()) {
             throw new AgentToolException("局部编辑没有返回结果");

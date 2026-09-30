@@ -39,29 +39,39 @@ public class AgentRedisConfig {
             RedisConnectionFactory connectionFactory,
             StringRedisTemplate stringRedisTemplate,
             AgentQueueService queueService) {
-        ensureConsumerGroup(stringRedisTemplate);
+        boolean streamsAvailable = ensureConsumerGroup(stringRedisTemplate);
         StreamMessageListenerContainerOptions<String, MapRecord<String, String, String>> options =
                 StreamMessageListenerContainerOptions.builder()
                         .pollTimeout(Duration.ofSeconds(2))
                         .build();
         StreamMessageListenerContainer<String, MapRecord<String, String, String>> container =
                 StreamMessageListenerContainer.create(connectionFactory, options);
-        container.receive(queueService.consumer(),
-                StreamOffset.create(AgentConstant.TOOL_RUN_STREAM_KEY, ReadOffset.lastConsumed()),
-                queueService::onMessage);
-        container.start();
-        log.info("Agent 工具任务 Stream 消费者已启动：stream={}，group={}",
-                AgentConstant.TOOL_RUN_STREAM_KEY, AgentConstant.TOOL_RUN_CONSUMER_GROUP);
+        if (streamsAvailable) {
+            container.receive(queueService.consumer(),
+                    StreamOffset.create(AgentConstant.TOOL_RUN_STREAM_KEY, ReadOffset.lastConsumed()),
+                    queueService::onMessage);
+            container.start();
+            queueService.setStreamsAvailable(true);
+            log.info("Agent 工具任务 Stream 消费者已启动：stream={}，group={}",
+                    AgentConstant.TOOL_RUN_STREAM_KEY, AgentConstant.TOOL_RUN_CONSUMER_GROUP);
+        } else {
+            log.warn("Redis 不支持 Streams；Agent 工具任务改用本地异步执行");
+        }
         return container;
     }
 
-    private void ensureConsumerGroup(StringRedisTemplate stringRedisTemplate) {
+    private boolean ensureConsumerGroup(StringRedisTemplate stringRedisTemplate) {
         try {
             stringRedisTemplate.opsForStream()
                     .createGroup(AgentConstant.TOOL_RUN_STREAM_KEY, AgentConstant.TOOL_RUN_CONSUMER_GROUP);
+            return true;
         } catch (Exception e) {
-            // BUSYGROUP：消费组已存在；连接失败时由容器重试
-            log.debug("工具任务消费组初始化跳过：{}", e.getMessage());
+            // 已存在的消费组可正常继续消费；旧版 Redis 不支持 Streams。
+            if (e.getMessage() != null && e.getMessage().contains("BUSYGROUP")) {
+                return true;
+            }
+            log.warn("工具任务消费组不可用：{}", e.getMessage());
+            return false;
         }
     }
 }

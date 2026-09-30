@@ -3,6 +3,7 @@ package com.zys.backend.agent.provider;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpUtil;
 import com.zys.backend.agent.service.AgentStorageService;
+import com.zys.backend.agent.tool.impl.AgentImageOps;
 import com.zys.backend.agent.tool.AgentToolException;
 import com.zys.backend.agent.tool.ProgressReporter;
 import com.zys.backend.api.aliyunai.AliYunAiApi;
@@ -25,7 +26,7 @@ import java.util.List;
 public class DashScopeAgentImageProvider implements AgentImageProvider {
 
     private static final long POLL_INTERVAL_MS = 3000L;
-    private static final long POLL_TIMEOUT_MS = 8 * 60 * 1000L;
+    private static final long POLL_TIMEOUT_MS = 31 * 60 * 1000L;
     private static final long PRESIGN_SECONDS = 30 * 60L;
 
     @Resource
@@ -49,7 +50,7 @@ public class DashScopeAgentImageProvider implements AgentImageProvider {
         List<byte[]> results = new ArrayList<>();
         for (int index = 0; index < count; index++) {
             reportQuietly(reporter, 30 + 50 * index / count, "生成中（" + (index + 1) + "/" + count + "）");
-            results.add(runEditTask(imageUrl, request.getPrompt(), request.getStrength(), reporter));
+            results.add(runEditTask(imageUrl, request.getPrompt(), request.getStrength(), request.getMask(), request.isKeepAlpha(), reporter));
         }
         reportQuietly(reporter, 90, "下载结果");
         return results;
@@ -59,6 +60,7 @@ public class DashScopeAgentImageProvider implements AgentImageProvider {
     public byte[] upscale(byte[] image, int scale, ProgressReporter reporter) {
         reportQuietly(reporter, 30, "提交超分任务");
         int factor = scale < 2 ? 2 : Math.min(scale, 4);
+        java.awt.image.BufferedImage original = AgentImageOps.read(image);
         EditImageRequest request = new EditImageRequest()
                 .setImage(image)
                 .setPrompt("将图片进行高质量超分辨率重建，放大 " + factor + " 倍，保留原图主体、构图、颜色和细节，不添加新内容")
@@ -68,11 +70,14 @@ public class DashScopeAgentImageProvider implements AgentImageProvider {
             throw new AgentToolException("超分未返回图片");
         }
         reportQuietly(reporter, 95, "完成");
-        return results.get(0);
+        return AgentImageOps.resizeExact(results.get(0),
+                Math.multiplyExact(original.getWidth(), factor),
+                Math.multiplyExact(original.getHeight(), factor));
     }
 
-    private byte[] runEditTask(String imageUrl, String prompt, Double strength, ProgressReporter reporter) {
-        CreateOutPaintingTaskResponse createResponse = aliYunAiApi.createImageEditTask(imageUrl, prompt, strength);
+    private byte[] runEditTask(String imageUrl, String prompt, Double strength, byte[] mask, boolean keepAlpha,
+                               ProgressReporter reporter) {
+        CreateOutPaintingTaskResponse createResponse = aliYunAiApi.createImageEditTask(imageUrl, prompt, strength, mask, keepAlpha);
         if (createResponse.getOutput() == null || StrUtil.isBlank(createResponse.getOutput().getTaskId())) {
             throw new AgentToolException("AI 编辑任务创建失败");
         }

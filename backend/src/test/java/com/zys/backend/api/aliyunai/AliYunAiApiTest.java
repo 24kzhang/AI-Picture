@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.*;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskResponse;
+import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskRequest;
 import com.zys.backend.api.aliyunai.model.GetOutPaintingTaskResponse;
 
 /**
@@ -57,6 +58,23 @@ class AliYunAiApiTest {
         GetOutPaintingTaskResponse result = new GetOutPaintingTaskResponse();
         when(editor.getTask("qwen-local-test")).thenReturn(result);
         assertSame(result, aliYunAiApi.getOutPaintingTask("qwen-local-test"));
+    }
+
+    @Test
+    void shouldPassOutpaintParametersToQwenAdapter() {
+        QwenImageEditor editor = mock(QwenImageEditor.class);
+        ReflectionTestUtils.setField(aliYunAiApi, "qwenImageEditor", editor);
+        CreateOutPaintingTaskRequest request = new CreateOutPaintingTaskRequest();
+        CreateOutPaintingTaskRequest.Input input = new CreateOutPaintingTaskRequest.Input();
+        input.setImageUrl("https://example.com/image.png");
+        request.setInput(input);
+        CreateOutPaintingTaskRequest.Parameters parameters = new CreateOutPaintingTaskRequest.Parameters();
+        parameters.setXScale(2F);
+        parameters.setYScale(2F);
+        request.setParameters(parameters);
+        CreateOutPaintingTaskResponse created = new CreateOutPaintingTaskResponse();
+        when(editor.submitOutpaint(eq(input.getImageUrl()), anyString(), same(parameters))).thenReturn(created);
+        assertSame(created, aliYunAiApi.createOutPaintingTask(request));
     }
 
     @Test

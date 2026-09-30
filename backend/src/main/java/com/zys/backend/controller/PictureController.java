@@ -8,6 +8,10 @@ import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.zys.backend.annotation.AuthCheck;
 import com.zys.backend.api.aliyunai.AliYunAiApi;
+import com.zys.backend.api.aliyunai.QwenImageEditor;
+import com.zys.backend.agent.service.AgentStorageService;
+import cn.hutool.http.HttpRequest;
+import cn.hutool.http.HttpResponse;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskResponse;
 import com.zys.backend.api.aliyunai.model.GetOutPaintingTaskResponse;
 import com.zys.backend.api.imagesearch.model.ImageSearchResult;
@@ -34,6 +38,8 @@ import com.zys.backend.service.PictureService;
 import com.zys.backend.service.SpaceService;
 import com.zys.backend.service.UserService;
 import org.springframework.beans.BeanUtils;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.util.DigestUtils;
@@ -54,6 +60,40 @@ public class PictureController {
 
     @Resource
     private PictureService pictureService;
+
+    @Resource
+    private AgentStorageService agentStorageService;
+
+    @Resource
+    private QwenImageEditor qwenImageEditor;
+
+    /** 编辑器通过受控接口读取图片，避免云存储跨域使画布无法载入或导出。 */
+    @GetMapping("/content")
+    @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.PICTURE_VIEW)
+    public ResponseEntity<byte[]> getPictureContent(Long pictureId, String url, HttpServletRequest request) {
+        userService.getLoginUser(request);
+        ThrowUtils.throwIf(pictureId == null || pictureId <= 0, ErrorCode.PARAMS_ERROR);
+        Picture picture = pictureService.getById(pictureId);
+        ThrowUtils.throwIf(picture == null, ErrorCode.NOT_FOUND_ERROR);
+        byte[] bytes;
+        String format = picture.getPicFormat();
+        if (StrUtil.isBlank(url) || url.equals(picture.getUrl())) {
+            bytes = agentStorageService.load(picture.getUrl());
+        } else {
+            ThrowUtils.throwIf(!qwenImageEditor.isGeneratedOutputUrl(url),
+                    ErrorCode.PARAMS_ERROR, "只能读取当前图片或有效的 AI 生成结果");
+            try (HttpResponse response = HttpRequest.get(url).timeout(30000).execute()) {
+                ThrowUtils.throwIf(!response.isOk(), ErrorCode.OPERATION_ERROR, "读取 AI 结果失败");
+                bytes = response.bodyBytes();
+            }
+            format = "png";
+        }
+        ThrowUtils.throwIf(bytes.length > 10L * 1024 * 1024, ErrorCode.PARAMS_ERROR, "图片不能超过 10MB");
+        String mime = "jpg".equalsIgnoreCase(format) || "jpeg".equalsIgnoreCase(format)
+                ? "image/jpeg" : "image/" + StrUtil.blankToDefault(format, "png");
+        return ResponseEntity.ok().header("Cache-Control", "private, no-store")
+                .contentType(MediaType.parseMediaType(mime)).body(bytes);
+    }
 
     @Resource
     private LocalImageSearchService localImageSearchService;

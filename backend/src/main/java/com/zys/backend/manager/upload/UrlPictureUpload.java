@@ -2,6 +2,7 @@ package com.zys.backend.manager.upload;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import com.zys.backend.api.aliyunai.QwenImageEditor;
 import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.exception.ThrowUtils;
@@ -14,6 +15,7 @@ import java.net.HttpURLConnection;
 import java.net.InetAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
+import javax.annotation.Resource;
 
 /**
  * URL 图片上传。包含大小限制、超时、重定向限制和 SSRF 防护。
@@ -23,6 +25,9 @@ public class UrlPictureUpload extends PictureUploadTemplate {
 
     private static final long MAX_FILE_SIZE = 10L * 1024 * 1024;
     private static final int MAX_REDIRECTS = 5;
+
+    @Resource
+    private QwenImageEditor qwenImageEditor;
 
     @Override
     protected void validPicture(Object inputSource) {
@@ -101,6 +106,11 @@ public class UrlPictureUpload extends PictureUploadTemplate {
     }
 
     private void validateRemoteUrl(URL url) {
+        // 服务器生成的图片可位于内网；只放行成功任务登记的精确产物地址。
+        // 每次重定向仍重新校验，通用 URL 上传继续限制本机及内网地址。
+        if (qwenImageEditor != null && qwenImageEditor.isGeneratedOutputUrl(url.toExternalForm())) {
+            return;
+        }
         String host = url.getHost();
         ThrowUtils.throwIf(StrUtil.isBlank(host), ErrorCode.PARAMS_ERROR, "图片地址缺少主机名");
         try {

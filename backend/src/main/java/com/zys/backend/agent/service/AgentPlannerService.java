@@ -75,8 +75,7 @@ public class AgentPlannerService {
      */
     public PlannerOutcome plan(PictureEditSession session, Picture picture, String goal) {
         if (!available()) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR,
-                    "未配置规划模型 API Key，对话指令不可用（agent.planner.apiKey）");
+            return fallbackPlan(goal);
         }
         JSONObject summary = buildCanvasSummary(session, picture);
         JSONArray messages = new JSONArray();
@@ -104,11 +103,70 @@ public class AgentPlannerService {
             }
             return parseResponse(response.body());
         } catch (BusinessException e) {
-            throw e;
+            log.warn("规划模型不可用，改用本地规则规划：{}", e.getMessage());
+            return fallbackPlan(goal);
         } catch (Exception e) {
-            log.error("规划模型调用异常", e);
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "规划模型调用异常：" + e.getMessage());
+            log.warn("规划模型调用异常，改用本地规则规划：{}", e.getMessage());
+            return fallbackPlan(goal);
         }
+    }
+
+    /**
+     * 没有外部规划模型或网关暂时不可用时，覆盖工作台常用指令，保证图片工具仍可操作。
+     * 这条路径只负责把明确的中文意图映射成已有工具，不生成模型内容。
+     */
+    private PlannerOutcome fallbackPlan(String goal) {
+        String text = goal == null ? "" : goal.trim();
+        PlannerOutcome outcome = new PlannerOutcome();
+        Map<String, Object> params = new LinkedHashMap<>();
+        if (containsAny(text, "局部替换", "局部改", "替换选区", "换材质")) {
+            params.put("prompt", text);
+            outcome.addStep("replace_region", params);
+            outcome.setReply("已按本地规则规划局部替换。");
+        } else if (containsAny(text, "局部消除", "消除", "删除物体", "移除物体")) {
+            params.put("prompt", text);
+            outcome.addStep("erase_region", params);
+            outcome.setReply("已按本地规则规划局部消除。");
+        } else if (containsAny(text, "换背景", "更换背景", "背景换成", "背景改成")) {
+            params.put("prompt", text);
+            outcome.addStep("replace_background", params);
+            outcome.setReply("已按本地规则规划换背景。");
+        } else if (containsAny(text, "扩图", "扩展画布", "扩展画幅")) {
+            params.put("ratio", text.contains("9:16") ? "9:16" : text.contains("1:1") ? "1:1" : "16:9");
+            params.put("prompt", text);
+            outcome.addStep("expand_canvas", params);
+            outcome.setReply("已按本地规则规划扩图。");
+        } else if (containsAny(text, "超分", "放大分辨率", "提高分辨率")) {
+            params.put("scale", text.contains("4") ? 4 : 2);
+            outcome.addStep("upscale_image", params);
+            outcome.setReply("已按本地规则规划超分。");
+        } else if (containsAny(text, "去背景", "抠图")) {
+            outcome.addStep("remove_background", params);
+            outcome.setReply("已按本地规则规划去背景。");
+        } else if (containsAny(text, "调色", "调亮", "变亮", "变暗")) {
+            params.put("brightness", text.contains("暗") ? -0.2 : 0.2);
+            outcome.addStep("adjust_image", params);
+            outcome.setReply("已按本地规则规划调色。");
+        } else if (containsAny(text, "营销图", "电商图", "主图")) {
+            params.put("kind", text.contains("海报") ? "poster" : text.contains("场景") ? "scene" : "product");
+            outcome.addStep("generate_marketing", params);
+            outcome.setReply("已按本地规则规划营销图。");
+        } else if (containsAny(text, "投放尺寸", "投放物料", "多尺寸")) {
+            outcome.addStep("prepare_delivery_sizes", params);
+            outcome.setReply("已按本地规则规划投放尺寸。");
+        } else {
+            outcome.setReply("已收到指令。请明确说明换背景、扩图、超分、去背景、调色、营销图或局部编辑目标。");
+        }
+        return outcome;
+    }
+
+    private boolean containsAny(String text, String... terms) {
+        for (String term : terms) {
+            if (text.contains(term)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

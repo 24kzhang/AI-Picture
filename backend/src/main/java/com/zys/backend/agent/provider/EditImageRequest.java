@@ -20,6 +20,12 @@ public class EditImageRequest {
      */
     private byte[] image;
 
+    /** 白色区域允许模型修改，黑色区域保持原图。 */
+    private byte[] mask;
+
+    /** 是否保留输入 alpha；生成透明抠图时需要允许模型重建透明通道。 */
+    private boolean keepAlpha = true;
+
     /**
      * 希望产生的候选数量，默认 1
      */

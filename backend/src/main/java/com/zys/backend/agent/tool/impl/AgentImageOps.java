@@ -65,6 +65,45 @@ public final class AgentImageOps {
         }
     }
 
+    /** 为 Qwen-Image 扩图准备目标比例条件图：原图居中，新增区域填白。 */
+    public static byte[] padForOutpaint(byte[] data, int width, int height) {
+        BufferedImage source = read(data);
+        BufferedImage target = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = target.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, width, height);
+        graphics.drawImage(source, (width - source.getWidth()) / 2,
+                (height - source.getHeight()) / 2, null);
+        graphics.dispose();
+        return writePng(target);
+    }
+
+    /** 生成扩图掩码：黑色保留原图，白色交给模型补全新增区域。 */
+    public static byte[] outpaintMask(byte[] data, int width, int height) {
+        BufferedImage source = read(data);
+        BufferedImage mask = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D graphics = mask.createGraphics();
+        graphics.setColor(Color.WHITE);
+        graphics.fillRect(0, 0, width, height);
+        graphics.setColor(Color.BLACK);
+        graphics.fillRect((width - source.getWidth()) / 2,
+                (height - source.getHeight()) / 2, source.getWidth(), source.getHeight());
+        graphics.dispose();
+        return writePng(mask);
+    }
+
+    /** 模型完成细节重建后，按用户选择的倍率交付实际像素尺寸。 */
+    public static byte[] resizeExact(byte[] data, int width, int height) {
+        BufferedImage source = read(data);
+        BufferedImage target = new BufferedImage(width, height,
+                source.getColorModel().hasAlpha() ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = target.createGraphics();
+        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        graphics.drawImage(source, 0, 0, width, height, null);
+        graphics.dispose();
+        return writePng(target);
+    }
+
     /**
      * 等比缩放到目标最长边
      */
@@ -156,9 +195,6 @@ public final class AgentImageOps {
         int width = source.getWidth();
         int height = source.getHeight();
         BufferedImage target = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D graphics = target.createGraphics();
-        graphics.drawImage(source, 0, 0, width, height, null);
-        graphics.dispose();
 
         BufferedImage scaledMask = scaleTo(mask, width, height);
         BufferedImage scaledEdited = scaleTo(edited, width, height);
@@ -167,7 +203,8 @@ public final class AgentImageOps {
         int[] editedRow = new int[width];
         int[] maskRow = new int[width];
         for (int y = 0; y < height; y++) {
-            target.getRGB(0, y, width, 1, sourceRow, 0, width);
+            // 直接复制原始像素，避免 Graphics2D 的预乘 alpha 舍入改变掩码外像素。
+            source.getRGB(0, y, width, 1, sourceRow, 0, width);
             scaledEdited.getRGB(0, y, width, 1, editedRow, 0, width);
             scaledMask.getRGB(0, y, width, 1, maskRow, 0, width);
             for (int x = 0; x < width; x++) {
@@ -191,7 +228,10 @@ public final class AgentImageOps {
                 int r = (int) Math.round(sr + (er - sr) * ratio);
                 int g = (int) Math.round(sg + (eg - sg) * ratio);
                 int b = (int) Math.round(sb + (eb - sb) * ratio);
-                sourceRow[x] = (0xff << 24) | (r << 16) | (g << 8) | b;
+                int sa = (sourceRow[x] >>> 24);
+                int ea = (editedRow[x] >>> 24);
+                int a = (int) Math.round(sa + (ea - sa) * ratio);
+                sourceRow[x] = (a << 24) | (r << 16) | (g << 8) | b;
             }
             target.setRGB(0, y, width, 1, sourceRow, 0, width);
         }

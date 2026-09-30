@@ -14,6 +14,8 @@ const pictureUrlFields = new Set(['url', 'thumbnailUrl', 'assetUrl', 'outputImag
  * 只改写本地文件接口 URL，外部 COS/第三方图片地址保持不变。
  */
 const normalizePictureUrls = (value: unknown, field?: string): unknown => {
+  // 图片内容以 Blob 返回，必须保留二进制对象，不能当普通 JSON 展开成空对象。
+  if (value instanceof Blob || value instanceof ArrayBuffer) return value
   if (typeof value === 'string' && field && pictureUrlFields.has(field) && value.includes('/api/files/')) {
     try {
       const currentApiOrigin = new URL(service.defaults.baseURL ?? window.location.origin, window.location.origin).origin
@@ -58,7 +60,7 @@ service.interceptors.response.use(
   },
   (error) => {
     if (error.code === 'ECONNABORTED') {
-      message.error('请求超时，请检查后端、百炼 API 与向量服务状态')
+      message.error('请求超时，请检查后端、模型服务与向量服务状态')
     }
     return Promise.reject(error)
   },

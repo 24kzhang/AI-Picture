@@ -52,14 +52,44 @@ public class AgentQueueService {
      */
     private final String consumerName = buildConsumerName();
 
+    private volatile boolean streamsAvailable;
+
+    public void setStreamsAvailable(boolean available) {
+        this.streamsAvailable = available;
+    }
+
     /**
      * 入队一个异步工具任务
      */
     public void enqueue(Long toolRunId) {
         MapRecord<String, String, String> record = MapRecord.create(AgentConstant.TOOL_RUN_STREAM_KEY,
                 java.util.Collections.singletonMap(AgentConstant.STREAM_FIELD_TOOL_RUN_ID, String.valueOf(toolRunId)));
-        stringRedisTemplate.opsForStream().add(record);
-        log.debug("工具任务入队，toolRunId={}", toolRunId);
+        boolean streamQueued = false;
+        try {
+            if (streamsAvailable) {
+                stringRedisTemplate.opsForStream().add(record);
+                streamQueued = true;
+                log.debug("工具任务入队，toolRunId={}", toolRunId);
+            }
+        } catch (Exception e) {
+            // 练习环境可能运行的是不支持 Redis Streams 的旧版 Redis（例如 Redis 3.x）。
+            // 此时不能让任务永久停在 queued；退回 JVM 异步执行，保持接口和浏览器流程可用。
+            log.warn("Redis Streams 不可用，退回本地异步执行，toolRunId={}: {}", toolRunId, e.getMessage());
+        }
+        if (streamQueued) {
+            return;
+        }
+        // 仅在没有可用的 Stream 消费者或入队失败时使用本地兜底。
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                toolRunService.executeQueued(toolRunId);
+            } catch (Exception fallbackError) {
+                log.error("本地异步执行工具任务失败，toolRunId={}", toolRunId, fallbackError);
+            }
+        });
+        if (!streamQueued) {
+            log.debug("已使用本地异步队列，toolRunId={}", toolRunId);
+        }
     }
 
     /**
@@ -103,6 +133,9 @@ public class AgentQueueService {
      */
     @Scheduled(fixedDelay = 60_000L, initialDelay = 30_000L)
     public void recoverPending() {
+        if (!streamsAvailable) {
+            return;
+        }
         try {
             PendingMessages pending = stringRedisTemplate.opsForStream().pending(
                     AgentConstant.TOOL_RUN_STREAM_KEY,

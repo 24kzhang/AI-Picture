@@ -85,7 +85,7 @@
       </aside>
     </div>
 
-    <footer class="footer"><span><b>{{ state.strokes.length }}</b> 条笔迹 · <b>{{ state.overlays.length }}</b> 个图层</span><a-space><a-button @click="closeModal">取消</a-button><a-button type="primary" :loading="loading" :disabled="!canEdit || imageLoading" @click="saveImage">保存并应用</a-button></a-space></footer>
+  <footer class="footer"><span><b>{{ state.strokes.length }}</b> 条笔迹 · <b>{{ state.overlays.length }}</b> 个图层</span><a-space><a-button @click="closeModal">取消</a-button><a-button type="primary" :loading="loading" :disabled="!canEdit || imageLoading || !sourceImage" @click="saveImage">保存并应用</a-button></a-space></footer>
     <ImageAiEditor ref="aiRef" :picture-id="picture?.id" :image-url="state.baseImageUrl" @apply="applyAiResult" />
   </a-modal>
 </template>
@@ -94,6 +94,7 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { uploadPictureUsingPost } from '@/api/pictureController.ts'
+import { request } from '@/request.ts'
 import { useLoginUserStore } from '@/stores/useLoginUserStore.ts'
 import PictureEditWebSocket from '@/utils/pictureEditWebSocket.ts'
 import { PICTURE_EDIT_ACTION_ENUM, PICTURE_EDIT_MESSAGE_TYPE_ENUM } from '@/constants/picture.ts'
@@ -175,11 +176,34 @@ const render = () => window.requestAnimationFrame(() => {
   state.value.strokes.forEach((stroke) => paintStroke(ctx, stroke)); if (activeStroke.value) paintStroke(ctx, activeStroke.value)
   state.value.overlays.forEach((item) => { ctx.save(); const size = Math.max(18, item.size * canvas.width); ctx.font = (item.type === 'text' ? '700 ' : '') + size + 'px Microsoft YaHei, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = item.color; ctx.shadowColor = 'rgba(0,0,0,.22)'; ctx.shadowBlur = item.type === 'text' ? 4 : 0; ctx.fillText(item.value, item.x * canvas.width, item.y * canvas.height); ctx.restore() })
 })
-const loadSource = (url: string) => new Promise<void>((resolve, reject) => {
-  imageLoading.value = true; const image = new Image(); image.crossOrigin = 'anonymous'
-  image.onload = () => { sourceImage.value = image; sourceSize.value = { width: image.naturalWidth, height: image.naturalHeight }; if (canvasRef.value) { canvasRef.value.width = image.naturalWidth; canvasRef.value.height = image.naturalHeight }; imageLoading.value = false; render(); resolve() }
-  image.onerror = () => { imageLoading.value = false; reject(new Error('图片加载失败，请检查图片跨域配置')) }; image.src = url
-})
+const loadSource = async (url: string) => {
+  imageLoading.value = true
+  let objectUrl: string | undefined
+  try {
+    if (props.picture?.id) {
+      const response = await request.get<Blob>('/api/picture/content', {
+        params: { pictureId: props.picture.id, url }, responseType: 'blob',
+      })
+      if (!response.data.type.startsWith('image/')) throw new Error('图片读取失败，请重新打开编辑器')
+      objectUrl = URL.createObjectURL(response.data)
+    }
+    await new Promise<void>((resolve, reject) => {
+      const image = new Image()
+      image.crossOrigin = 'anonymous'
+      image.onload = () => {
+        sourceImage.value = image
+        sourceSize.value = { width: image.naturalWidth, height: image.naturalHeight }
+        if (canvasRef.value) { canvasRef.value.width = image.naturalWidth; canvasRef.value.height = image.naturalHeight }
+        render(); resolve()
+      }
+      image.onerror = () => reject(new Error('图片加载失败，请重试'))
+      image.src = objectUrl ?? url
+    })
+  } finally {
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    imageLoading.value = false
+  }
+}
 const remember = () => { history.value.push(snapshot()); if (history.value.length > 30) history.value.shift(); future.value = [] }
 let websocket: PictureEditWebSocket | null = null
 const sync = (action: string) => { if (websocket && isTeamSpace.value && canEdit.value) websocket.sendMessage({ type: PICTURE_EDIT_MESSAGE_TYPE_ENUM.EDIT_ACTION, editAction: action, editData: { state: clone() } }) }
@@ -197,7 +221,7 @@ const addSticker = (value: string) => {
 }
 const pointAt = (event: PointerEvent): Point | undefined => {
   const canvas = canvasRef.value
-  if (!canvas) return
+  if (!canvas || !sourceImage.value) return
   const rect = canvas.getBoundingClientRect()
   if (!rect.width || !rect.height) return
   return { x: Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)), y: Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height)) }
@@ -298,7 +322,7 @@ const openAiEditor = () => aiRef.value?.openModal()
 const applyAiResult = async (url: string) => { remember(); state.value.baseImageUrl = url; try { await loadSource(url); sync(PICTURE_EDIT_ACTION_ENUM.AI_EDIT) } catch (error) { const previous = history.value.pop(); if (previous) await applyState(JSON.parse(previous) as EditorState); message.error(error instanceof Error ? error.message : 'AI 编辑结果载入失败') } }
 const saveImage = () => {
   const canvas = canvasRef.value
-  if (!canvas) return
+  if (!canvas || !sourceImage.value) return
   loading.value = true
   try {
     canvas.toBlob(async (blob) => {

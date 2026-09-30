@@ -98,7 +98,8 @@ public class BackgroundTools extends SessionToolBase implements AgentTool {
         ctx.report(30, "延伸画幅");
         EditImageRequest request = new EditImageRequest()
                 .setPrompt(String.valueOf(params.get("prompt")))
-                .setImage(source)
+                .setImage(AgentImageOps.padForOutpaint(source, target[0], target[1]))
+                .setMask(AgentImageOps.outpaintMask(source, target[0], target[1]))
                 .setWidth(target[0])
                 .setHeight(target[1])
                 .setCount(1);

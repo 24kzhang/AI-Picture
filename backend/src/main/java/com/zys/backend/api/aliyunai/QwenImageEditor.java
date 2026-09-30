@@ -7,6 +7,9 @@ import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.zys.backend.agent.tool.impl.AgentImageOps;
+import com.zys.backend.agent.service.AgentStorageService;
+import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskRequest;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskResponse;
 import com.zys.backend.api.aliyunai.model.GetOutPaintingTaskResponse;
 import com.zys.backend.exception.BusinessException;
@@ -16,12 +19,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PreDestroy;
+import javax.annotation.Resource;
 import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 /**
  * 将千问同步编辑接口适配为前端现有的任务轮询协议，避免长请求阻塞网页。
@@ -35,6 +40,9 @@ public class QwenImageEditor {
     @Value("${qwenImage.baseUrl:http://172.18.20.44:30066}")
     private String baseUrl;
 
+    @Resource
+    private AgentStorageService storageService;
+
     private final Cache<String, GetOutPaintingTaskResponse> tasks = Caffeine.newBuilder()
             .maximumSize(128).expireAfterWrite(24, TimeUnit.HOURS).build();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(2, 2, 0L,
@@ -45,10 +53,27 @@ public class QwenImageEditor {
             }, new ThreadPoolExecutor.AbortPolicy());
 
     public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt) {
+        return submit(imageUrl, prompt, null);
+    }
+
+    public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt, byte[] mask) {
+        return submit(imageUrl, prompt, mask, true);
+    }
+
+    public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt, byte[] mask, boolean keepAlpha) {
+        return submitTask(taskId -> generate(taskId, imageUrl, prompt, mask, keepAlpha));
+    }
+
+    public CreateOutPaintingTaskResponse submitOutpaint(String imageUrl, String prompt,
+                                                         CreateOutPaintingTaskRequest.Parameters parameters) {
+        return submitTask(taskId -> generateOutpaint(taskId, imageUrl, prompt, parameters));
+    }
+
+    private CreateOutPaintingTaskResponse submitTask(Consumer<String> action) {
         String taskId = TASK_PREFIX + UUID.randomUUID();
         tasks.put(taskId, state(taskId, "PENDING"));
         try {
-            executor.execute(() -> generate(taskId, imageUrl, prompt));
+            executor.execute(() -> action.accept(taskId));
         } catch (RejectedExecutionException e) {
             tasks.invalidate(taskId);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 编辑任务较多，请稍后重试");
@@ -76,23 +101,82 @@ public class QwenImageEditor {
         return response;
     }
 
-    private void generate(String taskId, String imageUrl, String prompt) {
+    /** 只信任本服务已成功生成的产物，不能用于放行任意内网 URL。 */
+    public boolean isGeneratedOutputUrl(String url) {
+        if (StrUtil.isBlank(url)) {
+            return false;
+        }
+        return tasks.asMap().values().stream().anyMatch(task -> task.getOutput() != null
+                && "SUCCEEDED".equals(task.getOutput().getTaskStatus())
+                && url.equals(task.getOutput().getOutputImageUrl()));
+    }
+
+    private void generate(String taskId, String imageUrl, String prompt, byte[] mask, boolean keepAlpha) {
         tasks.put(taskId, state(taskId, "RUNNING"));
         try {
-            byte[] source;
-            try (HttpResponse input = HttpRequest.get(imageUrl).timeout(30000).execute()) {
-                if (!input.isOk()) {
-                    fail(taskId, "读取原图失败（HTTP " + input.getStatus() + "）");
-                    return;
-                }
-                source = input.bodyBytes();
+            byte[] source = downloadSource(imageUrl);
+            generateFromBytes(taskId, source, prompt, mask, keepAlpha);
+        } catch (Exception e) {
+            log.warn("千问编辑请求未完成，异常类型={}", e.getClass().getSimpleName());
+            fail(taskId, "模型连接失败或等待超时，请稍后重试");
+        }
+    }
+
+    private void generateOutpaint(String taskId, String imageUrl, String prompt,
+                                  CreateOutPaintingTaskRequest.Parameters parameters) {
+        tasks.put(taskId, state(taskId, "RUNNING"));
+        try {
+            byte[] source = downloadSource(imageUrl);
+            java.awt.image.BufferedImage image = AgentImageOps.read(source);
+            float xScale = parameters == null || parameters.getXScale() == null ? 2F : parameters.getXScale();
+            float yScale = parameters == null || parameters.getYScale() == null ? 2F : parameters.getYScale();
+            if (!Float.isFinite(xScale) || !Float.isFinite(yScale)
+                    || xScale < 1F || xScale > 3F || yScale < 1F || yScale > 3F) {
+                fail(taskId, "扩图比例需在 1 到 3 之间");
+                return;
             }
-            try (HttpResponse http = HttpRequest.post(baseUrl + "/qwen-image/api/edit")
+            int width = Math.round(image.getWidth() * xScale);
+            int height = Math.round(image.getHeight() * yScale);
+            if (width > 8192 || height > 8192 || (long) width * height > 32_000_000L
+                    || width == image.getWidth() && height == image.getHeight()) {
+                fail(taskId, "扩图尺寸需大于原图，单边不超过 8192 像素且总面积不超过 3200 万像素");
+                return;
+            }
+            byte[] padded = AgentImageOps.padForOutpaint(source, width, height);
+            byte[] mask = AgentImageOps.outpaintMask(source, width, height);
+            generateFromBytes(taskId, padded, prompt, mask, true);
+        } catch (Exception e) {
+            log.warn("千问扩图请求未完成，异常类型={}", e.getClass().getSimpleName());
+            fail(taskId, "模型连接失败或等待超时，请稍后重试");
+        }
+    }
+
+    private byte[] downloadSource(String imageUrl) {
+        if (storageService != null && !storageService.isExternalUrl(imageUrl)) {
+            return storageService.load(imageUrl);
+        }
+        try (HttpResponse input = HttpRequest.get(imageUrl).timeout(30000).execute()) {
+            if (!input.isOk()) {
+                throw new IllegalStateException("读取原图失败（HTTP " + input.getStatus() + "）");
+            }
+            return input.bodyBytes();
+        }
+    }
+
+    private void generateFromBytes(String taskId, byte[] source, String prompt, byte[] mask, boolean keepAlpha) {
+        try {
+            HttpRequest request = HttpRequest.post(baseUrl + "/qwen-image/api/edit")
                     .form("image", source, "input.png")
                     .form("prompt", prompt)
                     .form("steps", 30)
                     .form("guidance_scale", 4)
-                    .timeout(1800000).execute()) {
+                    .form("keep_alpha", keepAlpha)
+                    .timeout(1800000);
+            if (mask != null && mask.length > 0) {
+                request.form("mask", mask, "mask.png")
+                        .form("mask_feather", 0);
+            }
+            try (HttpResponse http = request.execute()) {
                 if (!http.isOk()) {
                     log.warn("Qwen Image 编辑失败，状态码={}", http.getStatus());
                     fail(taskId, "模型请求失败（HTTP " + http.getStatus() + "）");

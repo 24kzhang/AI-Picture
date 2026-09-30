@@ -1,21 +1,15 @@
 package com.zys.backend.api.aliyunai;
 
 import cn.hutool.core.util.StrUtil;
-import cn.hutool.http.HttpRequest;
-import cn.hutool.http.HttpResponse;
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskRequest;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskResponse;
 import com.zys.backend.api.aliyunai.model.GetOutPaintingTaskResponse;
 import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import javax.annotation.Resource;
 
-@Slf4j
 @Component
 public class AliYunAiApi {
 
@@ -27,16 +21,6 @@ public class AliYunAiApi {
 
     @Resource
     private QwenImageEditor qwenImageEditor;
-
-
-    // 创建任务地址
-    public static final String CREATE_OUT_PAINTING_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/out-painting";
-    // 创建通用图片编辑任务地址
-    public static final String CREATE_IMAGE_EDIT_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2image/image-synthesis";
-
-
-    // 查询任务状态
-    public static final String GET_OUT_PAINTING_TASK_URL = "https://dashscope.aliyuncs.com/api/v1/tasks/%s";
 
 
     /**
@@ -53,11 +37,9 @@ public class AliYunAiApi {
         if (input == null || StrUtil.isBlank(input.getImageUrl())) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "待编辑图片地址不能为空");
         }
-        String prompt = "扩展图片画布，保持主体和风格自然一致";
-        if (createOutPaintingTaskRequest.getParameters() != null) {
-            prompt += "，生成完整自然的背景";
-        }
-        return qwenImageEditor.submit(input.getImageUrl(), prompt);
+        String prompt = "只补全新增画布区域，保持原图主体、构图和风格自然一致";
+        return qwenImageEditor.submitOutpaint(input.getImageUrl(), prompt,
+                createOutPaintingTaskRequest.getParameters());
     }
 
 
@@ -65,6 +47,19 @@ public class AliYunAiApi {
      * 创建自然语言图片编辑任务
      */
     public CreateOutPaintingTaskResponse createImageEditTask(String imageUrl, String prompt, Double strength) {
+        return createImageEditTask(imageUrl, prompt, strength, null);
+    }
+
+    public CreateOutPaintingTaskResponse createImageEditTask(String imageUrl, String prompt,
+                                                               Double strength, byte[] mask) {
+        return createImageEditTask(imageUrl, prompt, strength, mask, true);
+    }
+
+    public CreateOutPaintingTaskResponse createImageEditTask(String imageUrl, String prompt,
+                                                               Double strength, byte[] mask, boolean keepAlpha) {
+        if (qwenImageEditor == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "图像编辑服务未初始化");
+        }
         if (StrUtil.isBlank(imageUrl)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "待编辑图片地址不能为空");
         }
@@ -76,7 +71,13 @@ public class AliYunAiApi {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "编辑强度需在 0 到 1 之间");
         }
 
-        return qwenImageEditor.submit(imageUrl, prompt.trim());
+        // 保留旧适配器签名，已有调用方和单元测试无需感知服务器模型切换；
+        // 该重载内部同样只转发到 Qwen-Image 服务器。
+        if (keepAlpha && (mask == null || mask.length == 0)) {
+            return qwenImageEditor.submit(apiKey, imageEditModel, imageUrl, prompt.trim());
+        }
+        return keepAlpha ? qwenImageEditor.submit(imageUrl, prompt.trim(), mask)
+                : qwenImageEditor.submit(imageUrl, prompt.trim(), mask, false);
     }
     /**
      * 查询创建的任务结果
@@ -88,19 +89,6 @@ public class AliYunAiApi {
         if (StrUtil.isBlank(taskId)) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "任务 ID 不能为空");
         }
-        if (taskId.startsWith(QwenImageEditor.TASK_PREFIX)) {
-            return qwenImageEditor.getTask(taskId);
-        }
-        // 处理响应
-        String url = String.format(GET_OUT_PAINTING_TASK_URL, taskId);
-        try (HttpResponse httpResponse = HttpRequest.get(url)
-                .header("Authorization", "Bearer " + apiKey)
-                .execute()) {
-            if (!httpResponse.isOk()) {
-                log.error("请求异常：{}", httpResponse.body());
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "获取任务结果失败");
-            }
-            return JSONUtil.toBean(httpResponse.body(), GetOutPaintingTaskResponse.class);
-        }
+        return qwenImageEditor.getTask(taskId);
     }
 }

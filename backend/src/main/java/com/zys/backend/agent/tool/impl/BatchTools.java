@@ -179,8 +179,9 @@ public class BatchTools extends SessionToolBase implements AgentTool {
         switch (tool) {
             case "remove_background": {
                 List<byte[]> outputs = imageProvider.edit(new EditImageRequest()
-                        .setPrompt("去掉背景，只保留画面主体，背景区域填充纯白色")
+                        .setPrompt("This is an RGBA image with transparency. 去掉背景，只保留画面主体，背景必须完全透明，不要生成白色背景或棋盘格。")
                         .setImage(source)
+                        .setKeepAlpha(false)
                         .setCount(1), ctx.getReporter());
                 return first(outputs);
             }

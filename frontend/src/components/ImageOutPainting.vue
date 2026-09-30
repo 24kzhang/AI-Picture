@@ -6,7 +6,7 @@
     :footer="false"
     @cancel="closeModal"
   >
-    <a-row gutter="16">
+    <a-row :gutter="16">
       <a-col span="12">
         <h4>原始图片</h4>
         <img :src="picture?.url" :alt="picture?.name" style="max-width: 100%" />
@@ -23,7 +23,7 @@
     </a-row>
     <div style="margin-bottom: 16px" />
     <a-flex justify="center" gap="16">
-      <a-button type="primary" :loading="!!taskId" ghost @click="createTask">生成图片</a-button>
+      <a-button type="primary" :loading="submitting || !!taskId" ghost @click="createTask">生成图片</a-button>
       <a-button v-if="resultImageUrl" type="primary" :loading="uploadLoading" @click="handleUpload">
         应用结果
       </a-button>
@@ -32,7 +32,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref } from 'vue'
+import { onUnmounted, ref } from 'vue'
 import {
   createPictureOutPaintingTaskUsingPost,
   getPictureOutPaintingTaskUsingGet,
@@ -52,30 +52,33 @@ const resultImageUrl = ref<string>('')
 
 // 任务 id
 const taskId = ref<string>()
+const submitting = ref(false)
 
 /**
  * 创建任务
  */
 const createTask = async () => {
-  if (!props.picture?.id) {
+  if (!props.picture?.id || submitting.value || taskId.value) {
     return
   }
-  const res = await createPictureOutPaintingTaskUsingPost({
-    pictureId: props.picture.id,
-    // 根据需要设置扩图参数
-    parameters: {
-      xScale: 2,
-      yScale: 2,
-    },
-  })
-  if (res.data.code === 0 && res.data.data) {
-    message.success('创建任务成功，请耐心等待，不要退出界面')
-    console.log(res.data.data.output.taskId)
-    taskId.value = res.data.data.output.taskId
-    // 开启轮询
-    startPolling()
-  } else {
-    message.error('图片任务失败，' + res.data.message)
+  submitting.value = true
+  resultImageUrl.value = ''
+  try {
+    const res = await createPictureOutPaintingTaskUsingPost({
+      pictureId: props.picture.id,
+      parameters: { xScale: 2, yScale: 2 },
+    })
+    if (res.data.code === 0 && res.data.data?.output?.taskId) {
+      message.success('创建任务成功，请耐心等待，不要退出界面')
+      taskId.value = res.data.data.output.taskId
+      startPolling()
+    } else {
+      message.error(res.data.message || '图片任务创建失败')
+    }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '扩图任务创建失败')
+  } finally {
+    submitting.value = false
   }
 }
 
@@ -100,15 +103,18 @@ const startPolling = () => {
           resultImageUrl.value = taskResult.outputImageUrl
           // 清理轮询
           clearPolling()
-        } else if (taskResult.taskStatus === 'FAILED') {
-          message.error('扩图任务执行失败')
+        } else if (['FAILED', 'UNKNOWN', 'CANCELED'].includes(taskResult.taskStatus || '')) {
+          message.error('扩图任务执行失败：' + (taskResult.message || '请重新生成'))
           // 清理轮询
           clearPolling()
         }
+      } else {
+        message.error(res.data.message || '扩图任务查询失败')
+        clearPolling()
       }
     } catch (error) {
       console.error('扩图任务轮询失败', error)
-      message.error('扩图任务轮询失败，' + error.message)
+      message.error(error instanceof Error ? error.message : '扩图任务轮询失败')
       // 清理轮询
       clearPolling()
     }
@@ -169,7 +175,10 @@ const openModal = () => {
 // 关闭弹窗
 const closeModal = () => {
   visible.value = false
+  clearPolling()
 }
+
+onUnmounted(clearPolling)
 
 // 暴露函数给父组件
 defineExpose({

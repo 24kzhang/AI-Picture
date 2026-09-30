@@ -47,10 +47,11 @@
                   v-for="tool in session.tools"
                   :key="tool.name"
                   size="small"
-                  :disabled="!editable || running"
+                  :disabled="!editable || running || unavailableTools.has(tool.name)"
+                  :title="unavailableTools.has(tool.name) ? tool.description : undefined"
                   @click="openToolModal(tool)"
                 >
-                  {{ tool.label }}
+                  {{ tool.label }}{{ unavailableTools.has(tool.name) ? '（未开放）' : '' }}
                 </a-button>
               </div>
             </div>
@@ -242,6 +243,9 @@ const previewUrl = ref('')
 
 const messages = ref<ChatMessage[]>([])
 const eventSources = new Map<string, EventSource>()
+const runPollTimers = new Map<string, number>()
+// 两个分割工具目前只注册了占位处理器，明确展示未开放状态。
+const unavailableTools = new Set(['split_layers', 'promote_object_to_layer'])
 let leaseTimer: number | undefined
 
 const editable = computed(() => session.value?.status === 'active')
@@ -415,32 +419,52 @@ function updateRunMessage(run: AgentRunVO) {
 
 function subscribeRun(runId: string) {
   const key = String(runId)
-  if (eventSources.has(key)) return
+  if (runPollTimers.has(key)) return
   const source = new EventSource(agentRunEventsUrl(key), { withCredentials: true })
   eventSources.set(key, source)
+  let refreshing = false
   const refresh = async () => {
-    const res = await getAgentRun(key)
-    if (res.data.code === 0) {
-      updateRunMessage(res.data.data)
-      if (['succeeded', 'failed', 'canceled'].includes(res.data.data.status)) {
-        closeRunStream(key)
-        await refreshSessionQuiet()
+    if (refreshing || !runPollTimers.has(key)) return
+    refreshing = true
+    try {
+      const res = await getAgentRun(key)
+      // 组件离开后，忽略已经在途的响应。
+      if (!runPollTimers.has(key)) return
+      if (res.data.code === 0) {
+        updateRunMessage(res.data.data)
+        if (['succeeded', 'failed', 'canceled'].includes(res.data.data.status)) {
+          // 先同步产物，再结束订阅；快照失败时下一轮仍可恢复。
+          await refreshSessionQuiet()
+          closeRunStream(key)
+        }
       }
+    } catch {
+      // SSE 或快照短暂断线时保留轮询，恢复后继续显示任务结果。
+    } finally {
+      refreshing = false
     }
   }
-  source.onmessage = () => {
-    void refresh()
+  const onEvent = () => { void refresh() }
+  // 后端使用具名 SSE 事件，onmessage 只接收未命名的事件。
+  for (const event of ['snapshot', 'plan', 'progress', 'started', 'finished', 'failed', 'canceled']) {
+    source.addEventListener(event, onEvent)
   }
+  source.onmessage = onEvent
+  source.onopen = onEvent
   source.onerror = () => {
-    // 断线：关闭流，用户可通过刷新快照恢复
-    closeRunStream(key)
-    void refreshSessionQuiet()
+    source.close()
+    eventSources.delete(key)
+    onEvent()
   }
+  runPollTimers.set(key, window.setInterval(onEvent, 2500))
+  onEvent()
 }
 
 function closeRunStream(key: string) {
   eventSources.get(key)?.close()
   eventSources.delete(key)
+  window.clearInterval(runPollTimers.get(key))
+  runPollTimers.delete(key)
 }
 
 // endregion
@@ -458,7 +482,10 @@ const visibleParams = computed<ParamField[]>(
 function openToolModal(tool: AgentToolVO) {
   activeTool.value = tool
   const params: Record<string, unknown> = {}
-  for (const field of tool.params) {
+  // 老会话或服务端降级响应可能暂时不带 params；仍应打开工具弹窗，
+  // 让用户看到工具并补填可见参数，而不是在点击时抛出前端异常。
+  const fields = Array.isArray(tool.params) ? tool.params : []
+  for (const field of fields) {
     if (field.agentHidden) continue
     if (field.defaultValue !== undefined && field.defaultValue !== null) {
       params[field.name] = field.defaultValue
@@ -655,7 +682,7 @@ onMounted(init)
 
 onBeforeUnmount(() => {
   window.clearInterval(leaseTimer)
-  for (const key of Array.from(eventSources.keys())) {
+  for (const key of Array.from(runPollTimers.keys())) {
     closeRunStream(key)
   }
   if (session.value && editable.value) {
@@ -666,7 +693,8 @@ onBeforeUnmount(() => {
 
 <style scoped>
 #agentWorkbenchPage {
-  height: calc(100vh - 112px);
+  height: calc(100vh - 180px);
+  min-height: 440px;
   display: flex;
   flex-direction: column;
 }
@@ -674,6 +702,12 @@ onBeforeUnmount(() => {
 #agentWorkbenchPage :deep(.ant-spin-nested-loading),
 #agentWorkbenchPage :deep(.ant-spin-container) {
   height: 100%;
+  min-height: 0;
+}
+
+#agentWorkbenchPage :deep(.ant-spin-container) {
+  display: flex;
+  flex-direction: column;
 }
 
 .workbench-header {
@@ -725,11 +759,18 @@ onBeforeUnmount(() => {
 
 .tool-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   padding: 0 10px 10px;
   max-height: 260px;
   overflow-y: auto;
+}
+
+.tool-grid :deep(.ant-btn) {
+  min-width: 0;
+  height: auto;
+  min-height: 24px;
+  white-space: normal;
 }
 
 .center-panel {
