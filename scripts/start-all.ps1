@@ -15,6 +15,7 @@ if (Test-Path -LiteralPath $localEnv) {
 }
 $backendPort = if ($env:SERVER_PORT) { [int]$env:SERVER_PORT } else { 8080 }
 $frontendPort = 5173
+$videoPort = if ($env:VIDEO_PORT) { [int]$env:VIDEO_PORT } else { 8091 }
 $vectorPort = if ($env:VECTOR_PORT) { [int]$env:VECTOR_PORT } else { 18001 }
 
 New-Item -ItemType Directory -Force -Path $logRoot, $dataRoot | Out-Null
@@ -65,11 +66,17 @@ if ($backend) { $processes += $backend }
 $frontend = Start-GalleryProcess -Name 'frontend' -Port $frontendPort -ScriptPath (Join-Path $PSScriptRoot 'start-frontend.ps1')
 if ($frontend) { $processes += $frontend }
 
+if ($env:VIDEO_ENABLED -ne 'false') {
+    $video = Start-GalleryProcess -Name 'video-agent' -Port $videoPort -ScriptPath (Join-Path $PSScriptRoot 'start-video.ps1')
+    if ($video) { $processes += $video }
+}
+
 if ($processes.Count -gt 0) {
     $processes | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $dataRoot 'processes.json') -Encoding utf8
 }
 
 $requiredPorts = @($vectorPort, $backendPort, $frontendPort)
+if ($env:VIDEO_ENABLED -ne 'false') { $requiredPorts += $videoPort }
 $deadline = (Get-Date).AddMinutes(2)
 while ((Get-Date) -lt $deadline) {
     $missingPorts = @($requiredPorts | Where-Object { -not (Test-Port -Port $_) })

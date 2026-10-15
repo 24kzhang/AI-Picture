@@ -19,6 +19,9 @@ const SpaceUserManagePage = () => import('@/pages/admin/SpaceUserManagePage.vue'
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    { path: '/video/:id', name: '视频详情', component: () => import('@/pages/video/VideoDetailPage.vue') },
+    { path: '/video/editor/:id', name: '视频剪辑工作台', component: () => import('@/pages/video/VideoWorkbenchPage.vue') },
+    { path: '/video/hypit/:id', name: '完整 Hypit 视频工程', component: () => import('@/pages/video/HypitWorkbenchPage.vue') },
     {
       path: '/',
       name: 'home',

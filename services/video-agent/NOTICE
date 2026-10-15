@@ -1,0 +1,11 @@
+This integration uses Hypit 0.2.16, Copyright Hypit.AI and its contributors.
+The original Hypit name, logo and copyright remain in the embedded Studio.
+Hypit's modified Apache License is reproduced in LICENSE.hypit.
+
+Local modifications: configurable Studio base path and loopback binding,
+protected proxy and shared revision/lease writeback, deterministic gallery
+timeline operations, and self-hosted model Provider adapters.
+Patches are version-checked in src/studio.ts and are reapplied after npm ci.
+
+This project integration is for personal use and demonstration. External
+multi-tenant hosted use requires checking Hypit's commercial license terms.

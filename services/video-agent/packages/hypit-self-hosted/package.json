@@ -1,0 +1,9 @@
+{
+  "name": "@gallery/provider-self-hosted",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "hypit": { "activation": "./src/activation.ts" },
+  "exports": { ".": "./src/activation.ts" },
+  "dependencies": { "@hypit/hypit": "0.2.16" }
+}

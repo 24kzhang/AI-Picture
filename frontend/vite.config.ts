@@ -10,6 +10,10 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    proxy: {
+      '/api/video-editor': { target: 'http://127.0.0.1:8091', changeOrigin: false, ws: true },
+      '/api': { target: 'http://127.0.0.1:8090', changeOrigin: false, ws: true },
+    },
   },
   plugins: [vue(), vueDevTools()],
   resolve: {

@@ -54,6 +54,12 @@
         </a-space>
       </a-flex>
       <div style="margin-bottom: 16px" />
+      <a-tabs v-if="videoEnabled" v-model:activeKey="mediaTab">
+        <a-tab-pane key="picture" tab="图片" />
+        <a-tab-pane key="video" tab="视频" />
+      </a-tabs>
+      <VideoGallery v-if="mediaTab === 'video' && videoEnabled" :spaceId="spaceId" :canUpload="canUploadPicture" />
+      <template v-else>
       <!-- 搜索表单 -->
       <PictureSearchForm :onSearch="onSearch" />
       <div style="margin-bottom: 16px" />
@@ -90,6 +96,7 @@
         :pictureList="dataList"
         :onSuccess="onBatchEditPictureSuccess"
       />
+      </template>
     </template>
   </div>
 </template>
@@ -108,6 +115,9 @@ import { BarChartOutlined, EditOutlined, TeamOutlined } from '@ant-design/icons-
 import { SPACE_PERMISSION_ENUM, SPACE_TYPE_MAP } from '../constants/space.ts'
 import PictureSearchForm from '@/components/PictureSearchForm.vue'
 import BatchEditPictureModal from '@/components/BatchEditPictureModal.vue'
+import VideoGallery from '@/components/video/VideoGallery.vue'
+import { videoEnabled } from '@/api/videoEditor'
+const mediaTab = ref('picture')
 
 interface Props {
   id: string | number

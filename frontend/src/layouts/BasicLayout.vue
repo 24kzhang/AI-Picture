@@ -8,7 +8,7 @@
       <a-layout>
         <GlobalSider class="sider"/>
         <a-layout-content class="content">
-          <router-view />
+          <router-view :key="$route.path" />
         </a-layout-content>
       </a-layout>
 

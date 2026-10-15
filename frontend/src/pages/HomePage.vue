@@ -1,5 +1,11 @@
 <template>
   <div id="homePage">
+    <a-tabs v-if="videoEnabled" v-model:activeKey="mediaTab">
+      <a-tab-pane key="picture" tab="图片" />
+      <a-tab-pane key="video" tab="视频" />
+    </a-tabs>
+    <VideoGallery v-if="mediaTab === 'video' && videoEnabled" />
+    <template v-else>
     <!-- 搜索框 -->
     <div class="search-bar">
       <a-input-search
@@ -40,6 +46,7 @@
       @change="onPageChange"
     />
 
+    </template>
   </div>
 </template>
 
@@ -51,6 +58,10 @@ import {
 } from '@/api/pictureController.ts'
 import { message } from 'ant-design-vue'
 import PictureList from '@/components/PictureList.vue'
+import VideoGallery from '@/components/video/VideoGallery.vue'
+import { videoEnabled } from '@/api/videoEditor'
+import { useRoute } from 'vue-router'
+const mediaTab = ref(useRoute().query.media === 'video' ? 'video' : 'picture')
 
 // 定义数据
 const dataList = ref<API.PictureVO[]>([])
