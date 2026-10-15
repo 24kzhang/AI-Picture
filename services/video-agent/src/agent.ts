@@ -14,12 +14,14 @@ import { ApiError, invariant } from './errors.js'
 import { json } from './db.js'
 import { executionReceipt } from './agent-result.js'
 import { requestPlannerTurn } from './planner-client.js'
+import { plannerSourceFiles, preserveSourceMetadata, replaceSourceText } from './source-edits.js'
 
 const tools = [
   {name:'inspect_project',description:'查看项目、素材、整数帧时间线，24fps',parameters:{type:'object',properties:{},additionalProperties:false}},
   {name:'inspect_sources',description:'读取完整 Hypit 源文件集合、入口和工程模式。工程模式必须通过 update_sources 编辑，不能使用基础 clip 操作。',parameters:{type:'object',properties:{},additionalProperties:false}},
   {name:'component_vocabulary',description:'读取固定版本 Hypit 组件的真实语法、属性、输出和示例，禁止猜测组件属性。',parameters:{type:'object',properties:{package:{type:'string'}},required:['package'],additionalProperties:false}},
   {name:'update_sources',description:'候选替换完整工程中指定源文件。先编译验证，全部成功后才提交一个版本；保留未修改文件和元数据。禁止任意脚本、外部 URL 或商业模型调用。',parameters:{type:'object',properties:{files:{type:'array',items:{type:'object',properties:{path:{type:'string'},text:{type:'string'}},required:['path','text'],additionalProperties:false}},entry:{type:'string'}},required:['files'],additionalProperties:false}},
+  {name:'replace_source_text',description:'完整工程的精确局部修改。改标题、颜色或现有属性时优先使用，不需要输出整份文件。先inspect_sources读取原文；find必须在指定文件中唯一；所有修改编译通过后才提交。',parameters:{type:'object',properties:{edits:{type:'array',minItems:1,maxItems:16,items:{type:'object',properties:{path:{type:'string'},find:{type:'string',minLength:1},replace:{type:'string'}},required:['path','find','replace'],additionalProperties:false}}},required:['edits'],additionalProperties:false}},
   ...operationSchema.options.map(schema=>{const full=z.toJSONSchema(schema) as any;const name=full.properties.type.const;delete full.properties.type;full.required=full.required.filter((k:string)=>k!=='type');delete full.$schema;return {name,description:`确定性剪辑操作 ${name}。时间单位全部为整数帧，24帧=1秒；轨道ID和片段ID必须来自项目。`,parameters:full}}),
   ...Object.entries(modelSchemas).map(([name,schema])=>{const parameters=z.toJSONSchema(schema) as any;delete parameters.$schema;return{name,description:'调用已部署的自建媒体模型生成素材。返回素材ID后再用insert_clip插入，不会直接覆盖已有时间线。',parameters}}),
   {name:'transcribe',description:'转写所选片段实际使用的音频，一次调用自动移除该来源的旧字幕并插入新字幕，返回实际字幕片段；不需要再调用删除或插入。其他来源字幕及音视频保持原样，静音不影响转写。',parameters:{type:'object',properties:{clipId:{type:'string'}},required:['clipId'],additionalProperties:false}},
@@ -35,8 +37,9 @@ export async function agentRun(project:any,actor:Actor,context:WriteContext,mess
     {role:'user',content:JSON.stringify({message,project:{id:project.id,revision:current.revision,mode:current.source.mode||'timeline',state:candidate,assets:assets.map(({path,audioPath,...a})=>a)},selection})}]
   if(nativeSource)chat[0].content+=' 当前是完整 Hypit 工程，先 inspect_sources；按真实源码修改，仅在需要组件语法时使用 component_vocabulary。只改现有文字时直接按原结构修改。禁止基础 clip 操作或转写扁平片段，因为它们不能表达当前完整工程。需要 ASR 时保留现有素材和语义证据，明确说明限制。update_sources 只提交实际修改的文件及其完整内容，不复制未修改文件。图像视频配音生成素材后在源码中引用 ./assets/<id>.<png/mp4/wav>。'
   const availableTools=tools.filter(tool=>nativeSource
-    ? ['inspect_project','inspect_sources','component_vocabulary','update_sources','transcribe_asset','render',...Object.keys(modelSchemas)].includes(tool.function.name)
-    : !['inspect_sources','component_vocabulary','update_sources','transcribe_asset'].includes(tool.function.name))
+    ? ['inspect_project','inspect_sources','component_vocabulary','update_sources','replace_source_text','transcribe_asset','render',...Object.keys(modelSchemas)].includes(tool.function.name)
+    : !['inspect_sources','component_vocabulary','update_sources','replace_source_text','transcribe_asset'].includes(tool.function.name))
+  if(nativeSource)chat[0].content+=' 改现有文字或属性时优先 replace_source_text，只提供路径、唯一原文和替换文本。不要尝试解码或补写 gallery-state 元数据。'
   const executed:any[]=[],generated:string[]=[]
   let renderRequested=false,repairs=0,answer='',attempt=0,finished=false
   for(let round=0;round<config.agentMaxRounds;round++) {
@@ -49,13 +52,15 @@ export async function agentRun(project:any,actor:Actor,context:WriteContext,mess
       try {
         const args=JSON.parse(call.function.arguments||'{}');let result:any
         if(name==='inspect_project')result={state:candidate,assets:assets.map(({path,audioPath,...a})=>a),revision:current.revision}
-        else if(name==='inspect_sources')result={source:nativeSource||current.source,revision:current.revision,availablePackages:(await catalog()).packages.map(p=>p.name)}
+        else if(name==='inspect_sources'){const original=nativeSource||current.source;result={source:{mode:original.mode,entry:original.entry||'build.svrun',files:plannerSourceFiles(sourceFiles(original))},revision:current.revision,availablePackages:(await catalog()).packages.map(p=>p.name)}}
         else if(name==='component_vocabulary'){const workspace=await writeWorkspace(project.id,`agent-${runId}`,nativeSource||current.source,assets);result=await vocabulary(z.string().parse(args.package),workspace)}
-        else if(name==='update_sources'){
+        else if(name==='update_sources'||name==='replace_source_text'){
           invariant(!changed||nativeSource,'请先提交基础剪辑后再转换完整工程')
-          const edits=z.array(z.object({path:z.string(),text:z.string()})).min(1).max(32).parse(args.files),original=nativeSource||current.source
-          const proposed=normalizeSource({...original,mode:'hypit',state:candidate,entry:args.entry||original.entry,files:{...sourceFiles(original),...Object.fromEntries(edits.map(f=>[f.path,f.text]))}},assets)
-          await assertBuildReferences(project.id,proposed);await checkSource(project.id,proposed,assets);nativeSource=proposed;changed=true;result={validated:true,files:edits.map(f=>f.path),pendingCommit:true}
+          const original=nativeSource||current.source
+          const replacements=name==='replace_source_text'?replaceSourceText(sourceFiles(original),args.edits):Object.fromEntries(z.array(z.object({path:z.string(),text:z.string()})).min(1).max(32).parse(args.files).map(f=>[f.path,f.text]))
+          const edits=preserveSourceMetadata(sourceFiles(original),replacements)
+          const proposed=normalizeSource({...original,mode:'hypit',state:candidate,entry:args.entry||original.entry,files:{...sourceFiles(original),...edits}},assets)
+          await assertBuildReferences(project.id,proposed);await checkSource(project.id,proposed,assets);nativeSource=proposed;changed=true;result={validated:true,files:Object.keys(edits),pendingCommit:true}
         }
         else if(name in modelSchemas) {
           const asset=await generateAsset(name as ModelTool,args,project,actor,assets,runId,stepId)
