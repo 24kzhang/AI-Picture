@@ -58,6 +58,9 @@ public class AgentCommitService {
     private AgentAssetService assetService;
 
     @Resource
+    private LayerDocumentService documentService;
+
+    @Resource
     private AgentStorageService storageService;
 
     @Resource
@@ -110,7 +113,8 @@ public class AgentCommitService {
                     "图片正式版本已被他人更新，会话进入冲突状态；草稿已保留，请重新创建会话后再提交");
         }
 
-        byte[] bytes = assetService.loadBytes(asset);
+        byte[] bytes = java.util.Objects.equals(asset.getId(), session.getCurrentAssetId())
+                ? documentService.currentCanvasBytes(session) : assetService.loadBytes(asset);
         // 空间容量预检，避免无谓的 COS 写入
         checkSpaceCapacity(picture.getSpaceId(), picture.getPicSize(), bytes.length);
         StoredObject stored = storageService.storeVersion(picture.getId(),

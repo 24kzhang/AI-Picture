@@ -228,6 +228,23 @@ class AgentCommitServiceTest {
     }
 
     @Test
+    void ordinaryCommitStoresEditedCanvasInsteadOfBackingAsset() {
+        stubHappyPath();
+        com.zys.backend.agent.service.LayerDocumentService documents =
+                mock(com.zys.backend.agent.service.LayerDocumentService.class);
+        ReflectionTestUtils.setField(commitService, "documentService", documents);
+        PictureEditSession session = activeSession();
+        session.setCurrentAssetId(500L);
+        byte[] canvas = new byte[]{4, 5, 6};
+        when(documents.currentCanvasBytes(session)).thenReturn(canvas);
+
+        commitService.commit(session, null, 3L, user);
+
+        verify(storageService).storeVersion(100L, "png", canvas);
+        verify(assetService, never()).loadBytes(any());
+    }
+
+    @Test
     void optimisticLockFailureCleansOrphanObject() {
         stubHappyPath();
         when(pictureMapper.update(any(), any())).thenReturn(0);
