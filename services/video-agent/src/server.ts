@@ -50,7 +50,7 @@ app.setErrorHandler((error,request,reply)=>{
   reply.code(status).send({code:known?error.code:invalid?'INVALID_REQUEST':'SERVICE_ERROR',message:invalid?error.issues.map(i=>`${i.path.join('.')}: ${i.message}`).join(';'):(error as Error).message,detail:known?error.detail:undefined})
 })
 app.get(base+'/health',async()=>({ok:true,version:'0.1.0',hypit:'0.2.16'}))
-app.get(base+'/capabilities',async request=>{const actor=await authorize(request);return {userId:actor.userId,admin:actor.admin,limits:{assetBytes:config.maxAssetBytes,projectSeconds:config.maxFrames/24,quotaBytes:config.quotaBytes,quotaCount:config.quotaCount},models:await modelHealth()}})
+app.get(base+'/capabilities',async request=>{const actor=await authorize(request);return {userId:actor.userId,admin:actor.admin,planner:{model:config.llmModel},limits:{assetBytes:config.maxAssetBytes,projectSeconds:config.maxFrames/24,quotaBytes:config.quotaBytes,quotaCount:config.quotaCount},models:await modelHealth()}})
 app.get(base+'/voices',async request=>{await authorize(request);return voices()})
 app.get(base+'/projects',async(request:any)=>{
   const spaceId=request.query.spaceId?String(request.query.spaceId):null,actor=await authorize(request,{space_id:spaceId})

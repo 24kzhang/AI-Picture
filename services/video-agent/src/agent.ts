@@ -13,7 +13,7 @@ import {authorize,type Actor} from './auth.js'
 import { ApiError, invariant } from './errors.js'
 import { json } from './db.js'
 import { executionReceipt } from './agent-result.js'
-import { plannerFailureMessage } from './planner-error.js'
+import { requestPlannerTurn } from './planner-client.js'
 
 const tools = [
   {name:'inspect_project',description:'查看项目、素材、整数帧时间线，24fps',parameters:{type:'object',properties:{},additionalProperties:false}},
@@ -27,7 +27,7 @@ const tools = [
   {name:'render',description:'导出当前不可变项目版本',parameters:{type:'object',properties:{},additionalProperties:false}},
 ].map(tool=>({type:'function',function:tool}))
 export async function agentRun(project:any,actor:Actor,context:WriteContext,message:string,selection:any,runId:string) {
-  invariant(config.llmKey,'未配置视频规划模型密钥','LLM_NOT_CONFIGURED')
+  invariant(config.llmUrl,'未配置视频规划模型地址','LLM_NOT_CONFIGURED')
   let current=await revision(project.id,context.expectedRevision),assets=await projectAssets(project.id,actor,project)
   let candidate:State=current.state,changed=false,hasGenerated=false
   let nativeSource:SourceBundle|undefined=current.source.mode==='hypit'?current.source:undefined
@@ -38,10 +38,8 @@ export async function agentRun(project:any,actor:Actor,context:WriteContext,mess
   let renderRequested=false,repairs=0,answer='',attempt=0,finished=false
   for(let round=0;round<config.agentMaxRounds;round++) {
     if(await cancelled(runId))throw new ApiError(409,'RUN_CANCELLED','编辑任务已取消')
-    const response=await fetch(`${config.llmUrl.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${config.llmKey}`},body:JSON.stringify({model:config.llmModel,messages:chat,tools,tool_choice:'auto',temperature:.1,parallel_tool_calls:false}),signal:AbortSignal.timeout(120_000)})
-    if(!response.ok)throw new ApiError(502,'LLM_FAILED',plannerFailureMessage(response.status,await response.text()))
-    const envelope=await response.json() as any,turn=envelope.choices?.[0]?.message
-    invariant(turn,'对话模型没有返回消息');chat.push(turn)
+    const turn=await requestPlannerTurn(config,chat,tools)
+    chat.push(turn)
     if(!turn.tool_calls?.length){answer=turn.content||'编辑完成';finished=true;break}
     for(const call of turn.tool_calls) {
       const stepId=`agent-${attempt++}`,name=call.function.name
