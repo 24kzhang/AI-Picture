@@ -7,6 +7,7 @@ import { ApiError } from './errors.js'
 import { stateSchema, duration, type State, type Asset } from './timeline.js'
 import sharp from 'sharp'
 import { sourceFiles, runEntry } from './source-bundle.js'
+import {patchRenderPortSource} from './render-port-patch.js'
 
 export const hypitRoot = resolve(root, 'services/video-agent/node_modules/@hypit/hypit')
 export const ffmpegPath = process.env.VIDEO_FFMPEG || (process.platform === 'win32' && existsSync(resolve(root,'runtime-data/media-tools/ffmpeg.exe')) ? resolve(root,'runtime-data/media-tools/ffmpeg.exe') : 'ffmpeg')
@@ -37,6 +38,9 @@ async function prepareResults(){
 export async function patchMediaExecution() {
   const manifest=JSON.parse(await readFile(resolve(hypitRoot,'package.json'),'utf8'))
   if(manifest.version!=='0.2.16')throw new ApiError(500,'HYPIT_VERSION_MISMATCH','媒体补丁仅支持 Hypit 0.2.16')
+  const captureFile=resolve(hypitRoot,'packages/provider-hyperframes-local/src/capture.ts')
+  const captureSource=await readFile(captureFile,'utf8'),safeCaptureSource=patchRenderPortSource(captureSource)
+  if(safeCaptureSource!==captureSource)await writeFile(captureFile,safeCaptureSource,'utf8')
   const file=resolve(hypitRoot,'packages/media-execution/src/execute.ts')
   const source=await readFile(file,'utf8')
   const needle='assert(visual.role === "moving" && visual.timingStatus === "admissible"'
