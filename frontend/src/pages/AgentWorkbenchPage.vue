@@ -493,7 +493,7 @@ function openToolModal(tool: AgentToolVO) {
     if (field.defaultValue !== undefined && field.defaultValue !== null) {
       params[field.name] = field.defaultValue
     } else if (field.type === 'boolean') {
-      params[field.name] = undefined
+      params[field.name] = false
     } else if (field.type === 'array' && field.itemChoices) {
       params[field.name] = []
     }
