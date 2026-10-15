@@ -33,12 +33,15 @@ export async function agentRun(project:any,actor:Actor,context:WriteContext,mess
   let nativeSource:SourceBundle|undefined=current.source.mode==='hypit'?current.source:undefined
   const chat:any[]=[{role:'system',content:'你是云图库的视频剪辑助手。用给定工具完成用户要求。全部时间使用24fps整数帧、左闭右开。只能引用项目已有素材、轨道和片段ID；不要编造。视频原声已独立导入且默认联动，降低音乐只修改音乐轨。保留前3秒是trim_clip(at=原位置,length=72)，不能忽略素材入点。生成任务返回新素材，之后可插入。配音使用实际素材时长，覆盖原声区间需明确静音对应原声音轨。无必要不要生成素材。解释失败，不能声称未执行的操作完成。'},
     {role:'user',content:JSON.stringify({message,project:{id:project.id,revision:current.revision,mode:current.source.mode||'timeline',state:candidate,assets:assets.map(({path,audioPath,...a})=>a)},selection})}]
-  if(nativeSource)chat[0].content+=' 当前是完整 Hypit 工程，先 inspect_sources；按真实源码修改，使用 component_vocabulary 查询结构。禁止基础 clip 操作或转写扁平片段，因为它们不能表达当前完整工程。需要 ASR 时保留现有素材和语义证据，明确说明限制。update_sources 保留所有未改文件，图像视频配音生成素材后在源码中引用 ./assets/<id>.<png/mp4/wav>。'
+  if(nativeSource)chat[0].content+=' 当前是完整 Hypit 工程，先 inspect_sources；按真实源码修改，仅在需要组件语法时使用 component_vocabulary。只改现有文字时直接按原结构修改。禁止基础 clip 操作或转写扁平片段，因为它们不能表达当前完整工程。需要 ASR 时保留现有素材和语义证据，明确说明限制。update_sources 只提交实际修改的文件及其完整内容，不复制未修改文件。图像视频配音生成素材后在源码中引用 ./assets/<id>.<png/mp4/wav>。'
+  const availableTools=tools.filter(tool=>nativeSource
+    ? ['inspect_project','inspect_sources','component_vocabulary','update_sources','transcribe_asset','render',...Object.keys(modelSchemas)].includes(tool.function.name)
+    : !['inspect_sources','component_vocabulary','update_sources','transcribe_asset'].includes(tool.function.name))
   const executed:any[]=[],generated:string[]=[]
   let renderRequested=false,repairs=0,answer='',attempt=0,finished=false
   for(let round=0;round<config.agentMaxRounds;round++) {
     if(await cancelled(runId))throw new ApiError(409,'RUN_CANCELLED','编辑任务已取消')
-    const turn=await requestPlannerTurn(config,chat,tools)
+    const turn=await requestPlannerTurn(config,chat,availableTools)
     chat.push(turn)
     if(!turn.tool_calls?.length){answer=turn.content||'编辑完成';finished=true;break}
     for(const call of turn.tool_calls) {

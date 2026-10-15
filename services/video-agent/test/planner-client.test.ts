@@ -33,3 +33,11 @@ test('self-hosted native calls need no Aliyun key and preserve tool results',asy
     await assert.rejects(requestPlannerTurn(config,history,tools),/未完整生成/)
   } finally {server.close();server.closeAllConnections()}
 })
+
+test('explicit total timeout aborts delayed upstream responses with an actionable error',async()=>{
+  const server=createServer((_req,res)=>setTimeout(()=>res.end('{}'),100)).listen(0,'127.0.0.1')
+  await once(server,'listening')
+  try {
+    await assert.rejects(requestPlannerTurn({llmUrl:`http://127.0.0.1:${(server.address() as any).port}`,llmKey:'',llmModel:'Qwen3.8-27B-FP8',llmTimeoutMs:20},[],[]),/规划等待超时.*未提交/)
+  } finally {server.close();server.closeAllConnections()}
+})
