@@ -99,12 +99,15 @@ public class AgentPlannerService {
         try (HttpResponse response = request.execute()) {
             if (!response.isOk()) {
                 log.error("规划模型请求失败：{} {}", response.getStatus(), response.body());
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "规划模型请求失败，请稍后重试");
+                throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                        PlannerFailureMessage.describe(response.getStatus(), response.body()));
             }
             return parseResponse(response.body());
         } catch (BusinessException e) {
             log.warn("规划模型不可用，改用本地规则规划：{}", e.getMessage());
-            return fallbackPlan(goal);
+            PlannerOutcome fallback = fallbackPlan(goal);
+            fallback.setReply(e.getMessage() + "。当前使用本地规则，仅支持预设指令。\n" + fallback.getReply());
+            return fallback;
         } catch (Exception e) {
             log.warn("规划模型调用异常，改用本地规则规划：{}", e.getMessage());
             return fallbackPlan(goal);
