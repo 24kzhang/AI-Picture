@@ -83,4 +83,16 @@ class LayerDocumentServiceTest {
         layer.set("width", 40);
         assertEquals(Color.WHITE.getRGB(), render().getRGB(60, 20));
     }
+
+    @Test
+    void multilineTextPreservesBlankLinesAndWindowsNewlines() throws Exception {
+        JSONObject text = new JSONObject().set("kind", "text").set("text", "A\r\n\r\nB")
+                .set("x", 5).set("y", 2).set("fontSize", 12).set("fill", "#000000");
+        document.set("height", 80).set("layers", new JSONArray().put(text));
+        BufferedImage actual = render();
+        int lowerLinePixels = 0;
+        for (int y = 30; y < 47; y++) for (int x = 5; x < 25; x++)
+            if (actual.getRGB(x, y) != Color.WHITE.getRGB()) lowerLinePixels++;
+        assertTrue(lowerLinePixels > 0, "The third line must be rendered below the blank second line");
+    }
 }

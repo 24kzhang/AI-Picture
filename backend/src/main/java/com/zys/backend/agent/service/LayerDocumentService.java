@@ -487,7 +487,11 @@ public class LayerDocumentService {
         graphics.setColor(color);
         int x = (int) Math.round(layer.getDouble("x", 0.0));
         int y = (int) Math.round(layer.getDouble("y", 0.0)) + Math.max(8, fontSize);
-        graphics.drawString(text, x, y);
+        int line = 0;
+        for (String value : text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
+            graphics.drawString(value, x, y + (int) Math.round(line * Math.max(8, fontSize) * 1.2));
+            line++;
+        }
     }
 
     public static Color parseColor(String hex) {
