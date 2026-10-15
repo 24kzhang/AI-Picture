@@ -24,6 +24,7 @@
 
     <div ref="viewportRef" class="canvas-viewport">
       <div
+        ref="stageRef"
         class="canvas-stage"
         :style="{ width: `${displayWidth}px`, height: `${displayHeight}px` }"
         @mousedown="onStageMouseDown"
@@ -124,6 +125,7 @@ const emit = defineEmits<{
 }>()
 
 const viewportRef = ref<HTMLDivElement>()
+const stageRef = ref<HTMLDivElement>()
 const brushCanvasRef = ref<HTMLCanvasElement>()
 
 const selectionMode = ref<'none' | 'rect' | 'brush'>('none')
@@ -201,10 +203,11 @@ const hasStrokes = computed(
 )
 
 function stagePoint(event: MouseEvent) {
-  const stage = (event.currentTarget as HTMLElement).getBoundingClientRect()
+  const stage = stageRef.value?.getBoundingClientRect()
+  if (!stage?.width || !stage.height) return { x: 0, y: 0 }
   return {
-    x: (event.clientX - stage.left) / scale.value,
-    y: (event.clientY - stage.top) / scale.value,
+    x: Math.max(0, Math.min(docWidth.value, (event.clientX - stage.left) * docWidth.value / stage.width)),
+    y: Math.max(0, Math.min(docHeight.value, (event.clientY - stage.top) * docHeight.value / stage.height)),
   }
 }
 
@@ -226,12 +229,7 @@ function onStageMouseDown(event: MouseEvent) {
 
 function onMouseMove(event: MouseEvent) {
   if (!drawing.value) return
-  const stage = brushCanvasRef.value?.getBoundingClientRect()
-  if (!stage) return
-  const point = {
-    x: (event.clientX - stage.left) / scale.value,
-    y: (event.clientY - stage.top) / scale.value,
-  }
+  const point = stagePoint(event)
   if (selectionMode.value === 'rect') {
     const x = Math.min(startPoint.value.x, point.x)
     const y = Math.min(startPoint.value.y, point.y)
