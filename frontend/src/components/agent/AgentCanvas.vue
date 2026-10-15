@@ -182,7 +182,9 @@ function textStyle(layer: CanvasLayer) {
     fontSize: `${(layer.fontSize ?? 24) * scale.value}px`,
     color: layer.fill ?? '#000',
     opacity: layer.opacity ?? 1,
-    transform: `rotate(${layer.rotation ?? 0}deg)`,
+      width: layer.width === undefined ? 'max-content' : `${layer.width * scale.value}px`,
+      height: layer.height === undefined ? 'auto' : `${layer.height * scale.value}px`,
+      transform: `rotate(${layer.rotation ?? 0}deg) scale(${layer.scaleX ?? 1}, ${layer.scaleY ?? 1})`,
   }
 }
 

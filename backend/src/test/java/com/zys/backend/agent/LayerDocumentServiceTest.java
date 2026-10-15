@@ -97,4 +97,26 @@ class LayerDocumentServiceTest {
             if ((actual.getRGB(x, y) >>> 24) > 0) lowerLinePixels++;
         assertTrue(lowerLinePixels > 0, "The third line must be rendered below the blank second line");
     }
+
+    @Test
+    void textRotationAndScalingArePreservedInTheRenderedPixels() throws Exception {
+        JSONObject text = service.textLayer("title", "标题", "TEST", 24, "#000000").set("x", 60).set("y", 60);
+        document.set("width", 240).set("height", 240).set("layers", new JSONArray().put(text));
+        int[] normal = paintedBounds(render());
+        text.set("rotation", 90).set("scaleX", 2).set("scaleY", 2);
+        int[] transformed = paintedBounds(render());
+        assertEquals((normal[3] - normal[1] + 1) * 2, transformed[2] - transformed[0] + 1, 3);
+        assertEquals((normal[2] - normal[0] + 1) * 2, transformed[3] - transformed[1] + 1, 3);
+    }
+
+    private int[] paintedBounds(BufferedImage image) {
+        int[] bounds = {image.getWidth(), image.getHeight(), -1, -1};
+        for (int y = 0; y < image.getHeight(); y++) for (int x = 0; x < image.getWidth(); x++) {
+            if ((image.getRGB(x, y) >>> 24) == 0) continue;
+            bounds[0] = Math.min(bounds[0], x); bounds[1] = Math.min(bounds[1], y);
+            bounds[2] = Math.max(bounds[2], x); bounds[3] = Math.max(bounds[3], y);
+        }
+        assertTrue(bounds[2] >= bounds[0] && bounds[3] >= bounds[1]);
+        return bounds;
+    }
 }

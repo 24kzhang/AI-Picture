@@ -216,6 +216,7 @@ public class DocumentTools implements AgentTool {
         if (params.get("fill") != null) {
             layer.set("fill", String.valueOf(params.get("fill")));
         }
+        documentService.updateTextBounds(layer);
         return ToolResults.document(document);
     }
 

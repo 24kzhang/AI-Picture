@@ -152,6 +152,9 @@
                   :placeholder="`${field.description ?? ''}（JSON）`"
                 />
               </template>
+              <template v-else-if="field.name === 'text'">
+                <a-textarea v-model:value="toolParams[field.name]" :rows="3" :placeholder="field.description" />
+              </template>
               <template v-else>
                 <a-input
                   v-model:value="toolParams[field.name]"

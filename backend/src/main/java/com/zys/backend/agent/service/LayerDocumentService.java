@@ -22,6 +22,7 @@ import javax.imageio.ImageIO;
 import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
@@ -148,7 +149,11 @@ public class LayerDocumentService {
     public JSONObject resolveTextTarget(JSONObject document, String layerIdOrName) {
         JSONArray layers = layers(document);
         if (StrUtil.isNotBlank(layerIdOrName)) {
-            return resolveTarget(document, layerIdOrName);
+            JSONObject target = resolveTarget(document, layerIdOrName);
+            if (!KIND_TEXT.equals(target.getStr("kind"))) {
+                throw new AgentToolException("指定图层不是文字图层，请先添加文字图层");
+            }
+            return target;
         }
         for (int i = layers.size() - 1; i >= 0; i--) {
             JSONObject layer = layers.getJSONObject(i);
@@ -479,17 +484,48 @@ public class LayerDocumentService {
         if (StrUtil.isBlank(text)) {
             return;
         }
-        int fontSize = (int) Math.round(layer.getDouble("fontSize", 24.0));
+        double fontSize = Math.max(8, layer.getDouble("fontSize", 24.0));
         Color color = parseColor(layer.getStr("fill", "#000000"));
-        graphics.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, Math.max(8, fontSize)));
+        graphics.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 24).deriveFont((float) fontSize));
         graphics.setColor(color);
-        int x = (int) Math.round(layer.getDouble("x", 0.0));
-        int y = (int) Math.round(layer.getDouble("y", 0.0)) + Math.max(8, fontSize);
+        JSONObject measured = textLayer("", "", text, fontSize, layer.getStr("fill", "#000000"));
+        double width = layer.getDouble("width", measured.getDouble("width"));
+        double height = layer.getDouble("height", measured.getDouble("height"));
+        double lineHeight = fontSize * 1.2;
+        FontMetrics metrics = graphics.getFontMetrics();
+        double baseline = (lineHeight - metrics.getHeight()) / 2 + metrics.getAscent();
+        AffineTransform previous = graphics.getTransform();
+        graphics.translate(layer.getDouble("x", 0.0) + width / 2, layer.getDouble("y", 0.0) + height / 2);
+        graphics.rotate(Math.toRadians(layer.getDouble("rotation", 0.0)));
+        graphics.scale(layer.getDouble("scaleX", 1.0), layer.getDouble("scaleY", 1.0));
         int line = 0;
         for (String value : text.replace("\r\n", "\n").replace('\r', '\n').split("\n", -1)) {
-            graphics.drawString(value, x, y + (int) Math.round(line * Math.max(8, fontSize) * 1.2));
+            graphics.drawString(value, (float) (-width / 2), (float) (-height / 2 + baseline + line * lineHeight));
             line++;
         }
+        graphics.setTransform(previous);
+    }
+
+    public JSONObject textLayer(String id, String name, String text, double fontSize, String fill) {
+        JSONObject layer = new JSONObject().set("id", id).set("name", name).set("kind", KIND_TEXT)
+                .set("text", text).set("fontSize", fontSize).set("fill", fill)
+                .set("x", 0).set("y", 0).set("scaleX", 1).set("scaleY", 1)
+                .set("rotation", 0).set("opacity", 1).set("visible", true).set("locked", false);
+        updateTextBounds(layer);
+        return layer;
+    }
+
+    public void updateTextBounds(JSONObject layer) {
+        BufferedImage sample = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D graphics = sample.createGraphics();
+        try {
+            double size = Math.max(8, layer.getDouble("fontSize", 24.0));
+            graphics.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 24).deriveFont((float) size));
+            String[] lines = layer.getStr("text", "").replace("\r\n", "\n").replace('\r', '\n').split("\n", -1);
+            int width = 1;
+            for (String line : lines) width = Math.max(width, graphics.getFontMetrics().stringWidth(line));
+            layer.set("width", width).set("height", lines.length * size * 1.2);
+        } finally { graphics.dispose(); }
     }
 
     public static Color parseColor(String hex) {
