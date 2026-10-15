@@ -75,13 +75,15 @@ class LayerDocumentServiceTest {
         layer.set("opacity", 0.5);
         Color pixel = new Color(render().getRGB(20, 20));
         assertEquals(255, pixel.getRed());
-        assertTrue(pixel.getGreen() >= 126 && pixel.getGreen() <= 128);
+        assertEquals(0, pixel.getGreen());
+        int alpha = render().getRGB(20, 20) >>> 24;
+        assertTrue(alpha >= 127 && alpha <= 128);
     }
 
     @Test
     void resizedLayerDoesNotReuseOriginalAsset() throws Exception {
         layer.set("width", 40);
-        assertEquals(Color.WHITE.getRGB(), render().getRGB(60, 20));
+        assertEquals(0, render().getRGB(60, 20) >>> 24);
     }
 
     @Test
@@ -92,7 +94,7 @@ class LayerDocumentServiceTest {
         BufferedImage actual = render();
         int lowerLinePixels = 0;
         for (int y = 30; y < 47; y++) for (int x = 5; x < 25; x++)
-            if (actual.getRGB(x, y) != Color.WHITE.getRGB()) lowerLinePixels++;
+            if ((actual.getRGB(x, y) >>> 24) > 0) lowerLinePixels++;
         assertTrue(lowerLinePixels > 0, "The third line must be rendered below the blank second line");
     }
 }

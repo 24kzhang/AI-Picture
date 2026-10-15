@@ -401,7 +401,7 @@ public class LayerDocumentService {
     }
 
     /**
-     * 按图层顺序拍平为 PNG（白底）
+     * 按图层顺序拍平为 PNG，保留未覆盖区域和半透明图层的 alpha。
      */
     public byte[] flatten(PictureEditSession session, JSONObject document) {
         int width = Math.max(1, document.getInt("width", 1));
@@ -410,8 +410,6 @@ public class LayerDocumentService {
         Graphics2D graphics = canvas.createGraphics();
         graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        graphics.setColor(Color.WHITE);
-        graphics.fillRect(0, 0, width, height);
         for (Object raw : layers(document)) {
             JSONObject layer = (JSONObject) raw;
             if (!Boolean.TRUE.equals(layer.getBool("visible", true))) {
