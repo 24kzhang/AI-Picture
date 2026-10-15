@@ -210,9 +210,9 @@ public final class AgentImageOps {
             for (int x = 0; x < width; x++) {
                 int m = maskRow[x];
                 int maskAlpha = (m >> 24) & 0xff;
-                int maskLuma = ((m >> 16) & 0xff) * 299 / 1000
-                        + ((m >> 8) & 0xff) * 587 / 1000
-                        + (m & 0xff) * 114 / 1000;
+                int maskLuma = (((m >> 16) & 0xff) * 299
+                        + ((m >> 8) & 0xff) * 587
+                        + (m & 0xff) * 114) / 1000;
                 // 白底黑字或黑底白字 mask 都支持：取“非黑程度”与 alpha 的较小者
                 int strength = Math.min(maskAlpha, maskLuma);
                 if (strength <= 8) {

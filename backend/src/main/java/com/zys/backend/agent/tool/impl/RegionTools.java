@@ -2,6 +2,7 @@ package com.zys.backend.agent.tool.impl;
 
 import cn.hutool.json.JSONObject;
 import com.zys.backend.agent.provider.EditImageRequest;
+import com.zys.backend.agent.service.LayerDocumentService;
 import com.zys.backend.agent.tool.AgentTool;
 import com.zys.backend.agent.tool.AgentToolException;
 import com.zys.backend.agent.tool.ParamField;
@@ -16,6 +17,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.awt.image.BufferedImage;
 
 /**
  * 局部编辑异步工具：erase_region / replace_region。
@@ -90,7 +92,19 @@ public class RegionTools extends SessionToolBase implements AgentTool {
                 : assetService.getInSession(session.getId(), Long.valueOf(String.valueOf(rawMaskAssetId)));
 
         ctx.report(20, "读取画布");
-        byte[] source = canvasBytes(session);
+        JSONObject document = document(ctx);
+        String targetId = params.get("layerId") == null ? null : String.valueOf(params.get("layerId")).trim();
+        JSONObject target = targetId == null || targetId.isEmpty() ? null : documentService.resolveTarget(document, targetId);
+        if (target != null && !LayerDocumentService.KIND_IMAGE.equals(target.getStr("kind"))) {
+            throw new AgentToolException("局部生成只能修改图像图层，文字请使用改文字工具");
+        }
+        byte[] source = target == null ? canvasBytes(session) : layerBytes(session, target);
+        BufferedImage sourceImage = AgentImageOps.read(source);
+        byte[] effectiveMask = mask == null ? null : assetService.loadBytes(mask);
+        if (target != null && effectiveMask != null) {
+            effectiveMask = LayerMaskProjection.project(effectiveMask, document, target,
+                    sourceImage.getWidth(), sourceImage.getHeight());
+        }
 
         String prompt = mask == null ? wholePrompt : scopedPrompt;
         ctx.report(40, "局部生成");
@@ -98,8 +112,8 @@ public class RegionTools extends SessionToolBase implements AgentTool {
                 .setPrompt(prompt)
                 .setImage(source)
                 .setCount(1);
-        if (mask != null) {
-            request.setMask(assetService.loadBytes(mask));
+        if (effectiveMask != null) {
+            request.setMask(effectiveMask);
         }
         List<byte[]> outputs = imageProvider.edit(request, ctx.getReporter());
         if (outputs == null || outputs.isEmpty()) {
@@ -108,19 +122,25 @@ public class RegionTools extends SessionToolBase implements AgentTool {
 
         ctx.report(85, "合并结果");
         byte[] merged;
-        if (mask == null) {
-            // 无选区视为整图编辑（layerId 语义已由 resolveTarget 在图层工具中支持）
-            merged = outputs.get(0);
+        if (effectiveMask == null) {
+            merged = target == null ? outputs.get(0)
+                    : AgentImageOps.resizeExact(outputs.get(0), sourceImage.getWidth(), sourceImage.getHeight());
         } else {
-            byte[] maskBytes = assetService.loadBytes(mask);
-            merged = AgentImageOps.applyMasked(source, outputs.get(0), maskBytes);
+            merged = AgentImageOps.applyMasked(source, outputs.get(0), effectiveMask);
         }
 
         selectionService.clear(session.getId());
         PictureAgentAsset asset = save(session, AgentAssetKindEnum.CANDIDATE,
                 ctx.getToolRun().getTool(), merged);
-        JSONObject document = documentService.adoptIntoDocument(document(ctx), asset);
-        Map<String, Object> result = ToolResults.documentWithAdopt(document, asset);
+        Map<String, Object> result;
+        if (target == null) {
+            result = ToolResults.documentWithAdopt(documentService.adoptIntoDocument(document, asset), asset);
+        } else {
+            rewriteLayer(target, asset);
+            result = ToolResults.document(document);
+            result.put("assetIds", ToolResults.assetIds(Collections.singletonList(asset)));
+            result.put("layerId", target.getStr("id"));
+        }
         result.put("maskUsed", mask != null);
         return result;
     }
