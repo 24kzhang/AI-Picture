@@ -1,6 +1,9 @@
 package com.zys.backend.agent.tool.impl;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.json.JSONObject;
+import cn.hutool.json.JSONUtil;
+import com.zys.backend.agent.service.LayerDocumentService;
 import com.zys.backend.agent.provider.EditImageRequest;
 import com.zys.backend.agent.tool.AgentTool;
 import com.zys.backend.agent.tool.AgentToolException;
@@ -36,7 +39,8 @@ public class MarketingTools extends SessionToolBase implements AgentTool {
         MARKETING_PROMPTS.put("model",
                 "生成模特手持或佩戴该商品的半身展示图，简洁室内背景、自然光，商品细节清晰可辨。");
         MARKETING_PROMPTS.put("poster",
-                "做一张促销海报，突出商品，右侧或下方留出文字区，构图干净有冲击力。");
+                "生成无文字的电商海报底图，完整商品位于画面左侧约一半区域，右侧一半为干净的浅色留白。"
+                        + "保留商品原有包装、材质和颜色，不增添品牌、标签、价格、字母、数字、文字或任何类似文字的符号。");
     }
 
     @Override
@@ -50,7 +54,7 @@ public class MarketingTools extends SessionToolBase implements AgentTool {
                         .setChoices(new ArrayList<Object>(MARKETING_PROMPTS.keySet()))
                         .setDescription("product 商品主图、scene 场景氛围图、model 模特上身、poster 促销海报"),
                 ParamField.string("caption").setMaxLength(200)
-                        .setDescription("海报文案或补充要求"),
+                        .setDescription("poster 为需准确排版的文案；其他类型为补充要求"),
                 ParamField.integer("count").setMin(1.0).setMax(4.0).setDefaultValue(1)
                         .setDescription("候选数量 1-4"),
                 ParamField.string("ratio").setDefaultValue(RatioConstants.SQUARE)
@@ -79,13 +83,30 @@ public class MarketingTools extends SessionToolBase implements AgentTool {
             throw new AgentToolException("不支持的营销图类型：" + kind);
         }
         String caption = params.get("caption") == null ? "" : String.valueOf(params.get("caption")).trim();
-        String prompt = caption.isEmpty() ? promptBase : promptBase + " 文案：" + caption;
+        boolean poster = "poster".equals(kind);
+        // 图片模型只生成底图，商品文案由本地字体准确排版，避免杜撰小字、品牌和价格。
+        String prompt = poster || caption.isEmpty() ? promptBase : promptBase + " 补充要求：" + caption;
         int[] size = RatioConstants.sizeOf(String.valueOf(
                 params.getOrDefault("ratio", RatioConstants.SQUARE)));
         int count = params.get("count") == null ? 1 : (int) Math.round(Double.parseDouble(String.valueOf(params.get("count"))));
 
         ctx.report(15, "读取画布");
         byte[] source = canvasBytes(session);
+        if (poster) {
+            JSONObject imageOnly = JSONUtil.parseObj(document(ctx).toString());
+            List<String> existingText = new ArrayList<>();
+            for (Object raw : documentService.layers(imageOnly)) {
+                JSONObject layer = (JSONObject) raw;
+                if (LayerDocumentService.KIND_TEXT.equals(layer.getStr("kind"))) {
+                    if (layer.getBool("visible", true) && StrUtil.isNotBlank(layer.getStr("text"))) existingText.add(layer.getStr("text"));
+                    layer.set("visible", false);
+                }
+            }
+            if (caption.isEmpty()) caption = String.join("\n", existingText);
+            source = documentService.flatten(session, imageOnly);
+        }
+        // 编辑接口由参考图决定画幅，先适配目标比例，避免生成后补出大面积白边。
+        source = AgentImageOps.letterbox(source, size[0], size[1]);
         ctx.report(30, "生成营销图");
         EditImageRequest request = new EditImageRequest()
                 .setPrompt(prompt)
@@ -101,6 +122,7 @@ public class MarketingTools extends SessionToolBase implements AgentTool {
         List<Map<String, Object>> variants = new ArrayList<>();
         for (byte[] data : outputs) {
             byte[] fitted = AgentImageOps.letterbox(data, size[0], size[1]);
+            if (poster) fitted = MarketingPosterComposer.compose(fitted, caption);
             assets.add(save(session, AgentAssetKindEnum.MARKETING, "generate_marketing", fitted));
             Map<String, Object> variant = new LinkedHashMap<>();
             variant.put("kind", kind);
