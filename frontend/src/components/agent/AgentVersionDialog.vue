@@ -15,9 +15,9 @@
           style="margin-bottom: 12px"
         />
         <div v-if="finalAsset" class="final-preview">
-          <img :src="finalAsset.thumbnailUrl || finalAsset.url" alt="最终稿" />
+          <img :src="currentCanvasUrl || finalAsset.thumbnailUrl || finalAsset.url" alt="最终稿" />
           <div>
-            <p>已选定最终稿：{{ finalAsset.width }}×{{ finalAsset.height }}</p>
+            <p>已选定最终稿：{{ canvasWidth ?? finalAsset.width }}×{{ canvasHeight ?? finalAsset.height }}</p>
             <a-popconfirm
               title="确认提交为正式版本？提交后原图将被替换（版本历史保留）。"
               @confirm="doCommit"
@@ -83,6 +83,9 @@ const props = defineProps<{
   finalAsset?: AgentAssetVO | null
   expectedEditVersion: string | number
   canEdit: boolean
+  currentCanvasUrl?: string
+  canvasWidth?: number
+  canvasHeight?: number
 }>()
 
 const emit = defineEmits<{
