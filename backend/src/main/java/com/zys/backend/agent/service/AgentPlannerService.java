@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 规划服务：读取画布摘要，调用 DashScope OpenAI 兼容接口的规划模型，
+ * 规划服务：读取画布摘要，调用自建 Qwen OpenAI 兼容接口的规划模型，
  * 返回文本回复与工具调用计划。不引入 Spring AI，沿用项目 Hutool HTTP 风格。
  */
 @Slf4j
@@ -42,16 +42,16 @@ public class AgentPlannerService {
             + "出投放尺寸用 prepare_delivery_sizes；电商营销图用 generate_marketing；多图批量用 batch_process。\n"
             + "6. 图层类操作（缩放、移动、旋转、透明度、显隐、文字、顺序、裁剪）只改画布文档，不调用生成模型。";
 
-    @Value("${agent.planner.baseUrl:https://dashscope.aliyuncs.com/compatible-mode/v1}")
+    @Value("${agent.planner.baseUrl:http://172.18.20.44:30066/qwen-vl/v1}")
     private String baseUrl;
 
-    @Value("${agent.planner.apiKey:${aliYunAi.apiKey:}}")
+    @Value("${agent.planner.apiKey:}")
     private String apiKey;
 
-    @Value("${agent.planner.model:qwen-plus}")
+    @Value("${agent.planner.model:Qwen3.8-27B-FP8}")
     private String model;
 
-    @Value("${agent.planner.timeoutMs:120000}")
+    @Value("${agent.planner.timeoutMs:630000}")
     private int timeoutMs;
 
     @Resource
@@ -67,7 +67,7 @@ public class AgentPlannerService {
      * 规划模型是否可用
      */
     public boolean available() {
-        return StrUtil.isNotBlank(apiKey);
+        return StrUtil.isNotBlank(baseUrl);
     }
 
     /**
@@ -87,14 +87,20 @@ public class AgentPlannerService {
                 .set("model", model)
                 .set("messages", messages)
                 .set("temperature", 0)
+                .set("max_tokens", 4096)
+                .set("enable_thinking", false)
+                .set("stream", false)
+                .set("request_id", "gallery-image-" + java.util.UUID.randomUUID())
                 .set("tools", toolRegistry.toAgentToolSchemas())
                 .set("tool_choice", "auto");
 
-        HttpRequest request = HttpRequest.post(baseUrl + "/chat/completions")
-                .header("Authorization", "Bearer " + apiKey)
+        HttpRequest request = HttpRequest.post(baseUrl.replaceAll("/+$", "") + "/chat/completions")
                 .header("Content-Type", "application/json")
                 .timeout(timeoutMs)
                 .body(body.toString());
+        if (StrUtil.isNotBlank(apiKey)) {
+            request.header("Authorization", "Bearer " + apiKey);
+        }
 
         try (HttpResponse response = request.execute()) {
             if (!response.isOk()) {
@@ -110,7 +116,9 @@ public class AgentPlannerService {
             return fallback;
         } catch (Exception e) {
             log.warn("规划模型调用异常，改用本地规则规划：{}", e.getMessage());
-            return fallbackPlan(goal);
+            PlannerOutcome fallback = fallbackPlan(goal);
+            fallback.setReply("规划服务暂时不可用或返回无效计划，当前使用本地规则，仅支持预设指令。\n" + fallback.getReply());
+            return fallback;
         }
     }
 
@@ -212,6 +220,9 @@ public class AgentPlannerService {
         if (choices == null || choices.isEmpty()) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "规划模型未返回结果");
         }
+        if ("length".equals(choices.getJSONObject(0).getStr("finish_reason"))) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "规划结果未完整生成，请拆分指令后重试");
+        }
         JSONObject message = choices.getJSONObject(0).getJSONObject("message");
         if (message == null) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "规划模型返回格式异常");
@@ -235,7 +246,7 @@ public class AgentPlannerService {
                 try {
                     arguments = JSONUtil.toBean(argText, LinkedHashMap.class);
                 } catch (Exception e) {
-                    log.warn("规划模型工具参数解析失败：{}", argText);
+                    throw new BusinessException(ErrorCode.OPERATION_ERROR, "规划模型返回无效工具参数");
                 }
             }
             Map<String, Object> step = new LinkedHashMap<>();
