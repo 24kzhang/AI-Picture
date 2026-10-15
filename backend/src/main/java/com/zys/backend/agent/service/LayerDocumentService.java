@@ -445,13 +445,13 @@ public class LayerDocumentService {
         double scaleX = layer.getDouble("scaleX", 1.0);
         double scaleY = layer.getDouble("scaleY", 1.0);
         double rotation = Math.toRadians(layer.getDouble("rotation", 0.0));
-        AffineTransform previous = graphics.getTransform();
-        graphics.translate(x + layerWidth / 2, y + layerHeight / 2);
-        graphics.rotate(rotation);
-        graphics.scale(scaleX, scaleY);
-        graphics.drawImage(image, (int) Math.round(-layerWidth / 2), (int) Math.round(-layerHeight / 2),
-                (int) Math.round(layerWidth), (int) Math.round(layerHeight), null);
-        graphics.setTransform(previous);
+        AffineTransform placement = new AffineTransform();
+        placement.translate(x + layerWidth / 2, y + layerHeight / 2);
+        placement.rotate(rotation);
+        placement.scale(scaleX, scaleY);
+        placement.translate(-layerWidth / 2, -layerHeight / 2);
+        placement.scale(layerWidth / image.getWidth(), layerHeight / image.getHeight());
+        graphics.drawImage(image, placement, null);
     }
 
     private BufferedImage loadLayerImage(PictureEditSession session, JSONObject layer) {
