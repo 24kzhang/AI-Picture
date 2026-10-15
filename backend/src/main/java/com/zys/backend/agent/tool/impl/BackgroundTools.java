@@ -2,6 +2,7 @@ package com.zys.backend.agent.tool.impl;
 
 import cn.hutool.json.JSONObject;
 import com.zys.backend.agent.provider.EditImageRequest;
+import com.zys.backend.agent.provider.OutpaintingInstructions;
 import com.zys.backend.agent.tool.AgentTool;
 import com.zys.backend.agent.tool.AgentToolException;
 import com.zys.backend.agent.tool.ParamField;
@@ -97,7 +98,7 @@ public class BackgroundTools extends SessionToolBase implements AgentTool {
         byte[] source = canvasBytes(session);
         ctx.report(30, "延伸画幅");
         EditImageRequest request = new EditImageRequest()
-                .setPrompt(String.valueOf(params.get("prompt")))
+                .setPrompt(OutpaintingInstructions.build(String.valueOf(params.get("prompt"))))
                 .setImage(AgentImageOps.padForOutpaint(source, target[0], target[1]))
                 .setMask(AgentImageOps.outpaintMask(source, target[0], target[1]))
                 .setWidth(target[0])

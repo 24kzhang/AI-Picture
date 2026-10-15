@@ -8,6 +8,7 @@ import cn.hutool.json.JSONUtil;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.zys.backend.agent.tool.impl.AgentImageOps;
+import com.zys.backend.agent.provider.OutpaintingInstructions;
 import com.zys.backend.agent.service.AgentStorageService;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskRequest;
 import com.zys.backend.api.aliyunai.model.CreateOutPaintingTaskResponse;
@@ -144,7 +145,7 @@ public class QwenImageEditor {
             }
             byte[] padded = AgentImageOps.padForOutpaint(source, width, height);
             byte[] mask = AgentImageOps.outpaintMask(source, width, height);
-            generateFromBytes(taskId, padded, prompt, mask, true);
+            generateFromBytes(taskId, padded, OutpaintingInstructions.build(prompt), mask, true);
         } catch (Exception e) {
             log.warn("千问扩图请求未完成，异常类型={}", e.getClass().getSimpleName());
             fail(taskId, "模型连接失败或等待超时，请稍后重试");
