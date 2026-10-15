@@ -21,6 +21,7 @@ backend/src/main/resources/biz/vipCode.json
 !/docs/demo/
 /docs/demo/*
 /video/
+/services/video-agent/README.md
 
 # 教学与学习材料只保留本地（包括各模块下的同类目录）
 **/tutorials/
