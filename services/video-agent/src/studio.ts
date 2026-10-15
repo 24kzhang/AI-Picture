@@ -5,7 +5,8 @@ import { resolve } from 'node:path'
 import http from 'node:http'
 import net from 'node:net'
 import type { FastifyRequest, FastifyReply } from 'fastify'
-import { hypitRoot, writeWorkspace, sourceFor, type SourceBundle } from './hypit.js'
+import { hypitRoot, writeWorkspace, sourceFor, ffmpegPath, ffprobePath, type SourceBundle } from './hypit.js'
+import { mediaEnvironment } from './media-environment.js'
 import { dataRoot, root, config } from './config.js'
 import { revision, project as getProject, assertWrite, commitState, commitSource, assertBuildReferences, type WriteContext } from './projects.js'
 import { sourceFiles, runEntry, normalizeSource } from './source-bundle.js'
@@ -124,7 +125,7 @@ async function openStudioWorkspace(project:any,assets:Asset[]) {
   const workspace=await writeWorkspace(project.id,'studio',current.source,assets)
   const port=await studioPort()
   const child=spawn(process.execPath,[resolve(hypitRoot,'bin/hypit.mjs'),'studio','--run',resolve(workspace,runEntry(current.source)),'--workspace',workspace,'--runtime',resolve(workspace,'hypit.runtime.json'),'--port',String(port)],
-    {windowsHide:true,env:{...process.env,VIDEO_STUDIO_BASE:base,HYPIT_STATE_HOME:resolve(dataRoot,'hypit-state'),NODE_OPTIONS:'--use-system-ca',npm_config_cache:resolve(root,'runtime-data/npm-cache'),npm_config_registry:'https://registry.npmmirror.com'}})
+    {windowsHide:true,env:{...mediaEnvironment(process.env,[ffmpegPath,ffprobePath]),VIDEO_STUDIO_BASE:base,HYPIT_STATE_HOME:resolve(dataRoot,'hypit-state'),NODE_OPTIONS:'--use-system-ca',npm_config_cache:resolve(root,'runtime-data/npm-cache'),npm_config_registry:'https://registry.npmmirror.com'}})
   const log=createWriteStream(resolve(workspace,'studio.log'),{flags:'a'});child.stdout.pipe(log);child.stderr.pipe(log);child.on('exit',()=>log.end())
   let error='';child.stderr.on('data',chunk=>{error=(error+chunk.toString()).slice(-6000)})
   session={port,process:child,workspace,revision:current.revision};(session as any).entry=runEntry(current.source);sessions.set(project.id,session)
@@ -208,7 +209,7 @@ async function proxyStudioRequest(request:FastifyRequest,reply:FastifyReply,proj
     const fullLayout='<style>@media(min-width:921px) and (max-width:1200px){:root{--source-width:330px;--workspace-width:280px}}</style>'
     body=body.replace('<head>','<head>'+script+(full?fullLayout:compact))
   }
-  for(const header of ['content-range','accept-ranges'])if(response.headers.has(header))reply.header(header,response.headers.get(header))
+  for(const header of ['content-range','accept-ranges','x-hypit-storyboard-count','x-hypit-storyboard-columns','x-hypit-storyboard-rows','x-hypit-storyboard-tile-width','x-hypit-storyboard-tile-height','x-hypit-storyboard-sample-fps'])if(response.headers.has(header))reply.header(header,response.headers.get(header))
   return reply.code(response.status).header('Cache-Control','private, no-store').header('Content-Type',response.headers.get('content-type')||'application/json').send(body)
 }
 function projectionChangesWithoutValidation(state:State,svml:string,svs:string,assets:Asset[]) {
