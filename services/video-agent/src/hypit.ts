@@ -135,7 +135,9 @@ export async function command(program: string, args: string[], cwd?: string, log
     child.on('close', async code => { clearTimeout(timer); if (log) await writeFile(log, output + '\n' + error).catch(() => {}); code === 0 ? accept(output) : reject(new ApiError(422, 'MEDIA_PROCESS_FAILED', error || output || `进程退出 ${code}`)) })
   })
 }
-export const hypit = (args: string[], workspace: string, log?: string, onOutput?: (s: string) => void) => command(process.execPath, [resolve(hypitRoot, 'bin/hypit.mjs'), ...args, '--workspace', workspace, '--json'], workspace, log, onOutput)
+export const hypit = (args: string[], workspace: string, log?: string, onOutput?: (s: string) => void) =>
+  command(process.execPath, [resolve(hypitRoot, 'bin/hypit.mjs'), ...args,
+    ...(args[0] === 'vocabulary' ? [] : ['--workspace', workspace]), '--json'], workspace, log, onOutput)
 export async function writeWorkspace(projectId: string, revision: number | string, source: SourceBundle, assets: Asset[]) {
   await prepareResults()
   const workspace = resolve(dataRoot, 'projects', projectId, String(revision))
