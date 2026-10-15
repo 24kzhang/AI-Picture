@@ -48,6 +48,11 @@ public class ToolSpec {
      */
     private boolean sessionRequired;
 
+    /** 当前部署是否具备执行该工具的能力。未开放工具保留界面说明，但不提供给规划模型。 */
+    private boolean available = true;
+
+    private String unavailableReason;
+
     /**
      * 类型化参数载体（可选，仅作为文档化说明）
      */

@@ -74,7 +74,12 @@ public class ToolRegistry {
      * 校验并归一化参数，界面与 Agent 走同一套规则
      */
     public Map<String, Object> validateParams(String toolName, Map<String, Object> raw) {
-        return ParamValidator.validate(specOf(toolName), raw);
+        ToolSpec spec = specOf(toolName);
+        if (!spec.isAvailable()) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    spec.getUnavailableReason() == null ? "此工具暂未开放" : spec.getUnavailableReason());
+        }
+        return ParamValidator.validate(spec, raw);
     }
 
     /**
@@ -83,6 +88,9 @@ public class ToolRegistry {
     public JSONArray toAgentToolSchemas() {
         JSONArray array = new JSONArray();
         for (ToolSpec spec : specByName.values()) {
+            if (!spec.isAvailable()) {
+                continue;
+            }
             JSONObject properties = new JSONObject();
             JSONArray required = new JSONArray();
             for (ParamField field : spec.getParams()) {

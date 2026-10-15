@@ -25,6 +25,8 @@ public class LayerSplitTools implements AgentTool {
     public List<ToolSpec> specs() {
         ToolSpec split = new ToolSpec()
                 .setName("split_layers")
+                .setAvailable(false)
+                .setUnavailableReason(UNSUPPORTED_MESSAGE)
                 .setLabel("拆分层")
                 .setDescription("把画面拆成主体层与背景层（需要分割 Provider，第一阶段未开放）。")
                 .setQueued(true)
@@ -38,6 +40,8 @@ public class LayerSplitTools implements AgentTool {
                 });
         ToolSpec promote = new ToolSpec()
                 .setName("promote_object_to_layer")
+                .setAvailable(false)
+                .setUnavailableReason(UNSUPPORTED_MESSAGE)
                 .setLabel("提取对象为图层")
                 .setDescription("把选中的物体提取为独立图层（需要分割 Provider，第一阶段未开放）。")
                 .setQueued(true)

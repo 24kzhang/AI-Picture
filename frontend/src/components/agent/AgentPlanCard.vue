@@ -90,12 +90,13 @@ const STATUS_COLOR: Record<string, string> = {
   canceled: 'default',
 }
 
-const statusText = computed(() => STATUS_TEXT[props.run.status] ?? props.run.status)
-const statusColor = computed(() => STATUS_COLOR[props.run.status] ?? 'default')
+const replyOnly = computed(() => props.run.status === 'succeeded' && !(props.run.plan?.length))
+const statusText = computed(() => replyOnly.value ? '已回复' : (STATUS_TEXT[props.run.status] ?? props.run.status))
+const statusColor = computed(() => replyOnly.value ? 'default' : (STATUS_COLOR[props.run.status] ?? 'default'))
 const statusIcon = computed(() => {
   switch (props.run.status) {
     case 'succeeded':
-      return '✅'
+      return replyOnly.value ? '💬' : '✅'
     case 'failed':
       return '❌'
     case 'canceled':

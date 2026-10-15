@@ -40,7 +40,9 @@ public class AgentPlannerService {
             + "5. 换背景用 replace_background；局部改内容用 replace_region；消除物体用 erase_region；"
             + "整体明暗色彩用 adjust_image；提高分辨率用 upscale_image；扩画幅用 expand_canvas；"
             + "出投放尺寸用 prepare_delivery_sizes；电商营销图用 generate_marketing；多图批量用 batch_process。\n"
-            + "6. 图层类操作（缩放、移动、旋转、透明度、显隐、文字、顺序、裁剪）只改画布文档，不调用生成模型。";
+            + "6. 图层类操作（缩放、移动、旋转、透明度、显隐、文字、顺序、裁剪）只改画布文档，不调用生成模型。\n"
+            + "7. 当前部署尚无图像分割服务，不能自动拆分图层或提取物体为独立图层。此类请求直接解释能力限制，"
+            + "不要承诺成功，也不要用抠图或换背景工具冒充图层分割。";
 
     @Value("${agent.planner.baseUrl:http://172.18.20.44:30066/qwen-vl/v1}")
     private String baseUrl;

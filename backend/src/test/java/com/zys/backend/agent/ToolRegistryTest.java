@@ -5,6 +5,7 @@ import com.zys.backend.agent.tool.AgentToolHandler;
 import com.zys.backend.agent.tool.ParamField;
 import com.zys.backend.agent.tool.ToolRegistry;
 import com.zys.backend.agent.tool.ToolSpec;
+import com.zys.backend.agent.tool.impl.LayerSplitTools;
 import com.zys.backend.exception.BusinessException;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
@@ -73,6 +74,21 @@ class ToolRegistryTest {
         assertNotNull(registry.specOf("cross_tool"));
         List<ToolSpec> all = registry.all();
         assertEquals("demo_tool", all.get(0).getName());
+    }
+
+    @Test
+    void shouldKeepUnavailableToolsOutOfPlanningAndRejectDirectExecution() {
+        ToolRegistry deployment = new ToolRegistry();
+        ReflectionTestUtils.setField(deployment, "tools", Collections.singletonList(new LayerSplitTools()));
+        deployment.init();
+        assertEquals(2, deployment.all().size());
+        assertTrue(deployment.toAgentToolSchemas().isEmpty());
+        for (ToolSpec spec : deployment.all()) {
+            assertFalse(spec.isAvailable());
+            BusinessException error = assertThrows(BusinessException.class,
+                    () -> deployment.validateParams(spec.getName(), Collections.emptyMap()));
+            assertTrue(error.getMessage().contains("分割 Provider"));
+        }
     }
 
     @Test
