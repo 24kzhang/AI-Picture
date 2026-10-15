@@ -119,7 +119,7 @@
               </template>
               <template v-else-if="field.type === 'number' || field.type === 'integer'">
                 <a-slider
-                  v-if="field.min !== undefined && field.max !== undefined && field.max <= 4"
+                  v-if="typeof field.min === 'number' && typeof field.max === 'number' && field.max <= 4"
                   v-model:value="toolParams[field.name]"
                   :min="field.min"
                   :max="field.max"
@@ -128,8 +128,8 @@
                 <a-input-number
                   v-else
                   v-model:value="toolParams[field.name]"
-                  :min="field.min"
-                  :max="field.max"
+                  :min="field.min ?? undefined"
+                  :max="field.max ?? undefined"
                   style="width: 100%"
                 />
                 <div class="field-desc">{{ field.description }}</div>
