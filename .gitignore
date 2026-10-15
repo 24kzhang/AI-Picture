@@ -9,6 +9,7 @@ vector-service/data/
 runtime-data/
 runtime-logs/
 .playwright-cli/
+.playwright-mcp/
 .mnemon/
 .reasonix/
 backend/httpTest/http-client.env.json
@@ -20,6 +21,19 @@ backend/src/main/resources/biz/vipCode.json
 !/docs/demo/
 /docs/demo/*
 /video/
+
+# 教学与学习材料只保留本地（包括各模块下的同类目录）
+**/tutorials/
+**/teaching/
+**/教学文档/
+**/学习文档/
+*教程*.md
+*教学*.md
+*学习笔记*.md
+*教程*.pdf
+*教程*.docx
+*教学*.pdf
+*教学*.docx
 
 # 本地测试图片与生成媒体不提交，仅允许下方明确列出的 README 演示截图
 output/
