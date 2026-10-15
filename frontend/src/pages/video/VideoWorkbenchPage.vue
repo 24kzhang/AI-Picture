@@ -63,7 +63,7 @@ function addTitle(){void operate([{type:'insert_clip',trackId:state.value!.track
 function changeAspect(event:Event){const portrait=(event.target as HTMLSelectElement).value==='portrait';void operate([{type:'set_layout',width:portrait?720:1280,height:portrait?1280:720}])}
 async function loadVersions(){try{versions.value=await videoApi(`/projects/${id}/versions`)}catch(e){fail(e)}}
 async function sendMessage(){try{const text=prompt.value;const run=await videoApi(`/projects/${id}/messages`,{...writeContext(),message:text,selection:{playhead:playhead.value,clipId:selectedId.value}});chat.value.push({role:'user',text});prompt.value='';watchRun(run)}catch(e){fail(e)}}
-function transcribe(){if(selected.value){prompt.value=`对片段 ${selected.value.id} 转写实际使用的音频，添加中文字幕。`;void sendMessage()}}
+async function transcribe(){if(!selected.value)return;try{watchRun(await videoApi(`/projects/${id}/transcribe`,{...writeContext(),clipId:selected.value.id}))}catch(e){fail(e)}}
 async function generate(){try{const args:any=modelTool.value==='synthesize_speech'?{text:modelPrompt.value,spk_name:voiceName.value}:{prompt:modelPrompt.value};if(referenceAssetId.value){if(modelTool.value==='generate_image')args.referenceAssetIds=[referenceAssetId.value];else args.referenceAssetId=referenceAssetId.value}watchRun(await videoApi(`/projects/${id}/generate`,{...writeContext(),tool:modelTool.value,args}));modelPrompt.value=''}catch(e){fail(e)}}
 async function exportVideo(){try{watchRun(await videoApi(`/projects/${id}/exports`,writeContext()))}catch(e){fail(e)}}
 function runLabel(status:string){return ({queued:'排队中',running:'执行中',done:'已完成',error:'执行失败',cancelled:'已取消',unknown:'提交结果未知',lost:'远端任务丢失',awaiting_authorization:'服务重启，等待恢复'} as Record<string,string>)[status]||status}

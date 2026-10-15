@@ -24,6 +24,7 @@ import { renderProject } from './render.js'
 import { proxyStudio, closeStudios, studioSession } from './studio.js'
 import {cloneVariant} from './variants.js'
 import {snapshotProject} from './snapshots.js'
+import {transcribeTimelineClip} from './transcription.js'
 
 export const app=Fastify({logger:{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-video-service-key']},bodyLimit:2*1024**2})
 await app.register(multipart,{limits:{fileSize:config.maxAssetBytes,files:1,fields:8}})
@@ -136,6 +137,13 @@ app.post(base+'/projects/:id/messages',async(request:any)=>{
 })
 app.post(base+'/projects/:id/exports',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body);const snapshot=await revision(value.id,ctx.expectedRevision),assets=await projectAssets(value.id,actor,value);const run=await createRun(value.id,actor,ctx,'export',{});enqueue(run.id,()=>renderProject(value,snapshot.revision,snapshot.source,assets,actor,run.id));return run})
 app.post(base+'/projects/:id/generate',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body);const tool=z.enum(['generate_image','generate_video','synthesize_speech']).parse(request.body.tool),args=request.body.args;const run=await createRun(value.id,actor,ctx,'generation',{tool,args});enqueue(run.id,async()=>publicAsset(await generateAsset(tool,args,value,actor,await projectAssets(value.id,actor,value),run.id,'generation')));return run})
+app.post(base+'/projects/:id/transcribe',async(request:any)=>{
+  const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body)
+  const clipId=idSchema.parse(request.body.clipId)
+  const run=await createRun(value.id,actor,ctx,'transcription',{clipId})
+  enqueue(run.id,()=>transcribeTimelineClip(value,actor,ctx,clipId,run.id))
+  return run
+})
 app.get(base+'/runs/:id',async(request:any)=>{const {run}=await protectedRun(request);return run})
 app.get(base+'/runs/:id/media',async(request:any,reply)=>{const {run,value,actor}=await protectedRun(request);const output=run.kind==='agent'?run.result?.export:run.result;invariant(run.status==='done'&&output?.objectKey,'成片尚不可用');return media(request,reply,value,actor,output.objectKey)})
 app.get(base+'/runs/:id/events',async(request:any,reply)=>{
@@ -177,12 +185,12 @@ app.post(base+'/runs/:id/retry',async(request:any)=>{
     const requestContext={...ctx,expectedRevision:run.revision,idempotencyKey:run.request.context.idempotencyKey} as WriteContext
     if(run.kind==='agent'&&run.revision!==value.revision)throw new ApiError(409,'REVISION_CONFLICT','项目已更新，请选择重新规划以使用最新版本')
       if(!await resumeRun(run.id,actor,ctx))return getRun(run.id)
-    enqueue(run.id,()=>run.kind==='generation'?projectAssets(value.id,actor,value).then(assets=>generateAsset(run.request.tool,run.request.args,value,actor,assets,run.id,'generation')):run.kind==='export'?revision(value.id,run.revision).then(async snapshot=>renderProject(value,snapshot.revision,snapshot.source,await projectAssets(value.id,actor,value),actor,run.id)):run.kind==='snapshot'?projectAssets(value.id,actor,value).then(assets=>snapshotProject(value,assets,actor,run.id,run.request.frames)):agentRun(value,actor,requestContext,run.request.message,run.request.selection,run.id));return getRun(run.id)
+    enqueue(run.id,()=>run.kind==='generation'?projectAssets(value.id,actor,value).then(assets=>generateAsset(run.request.tool,run.request.args,value,actor,assets,run.id,'generation')):run.kind==='export'?revision(value.id,run.revision).then(async snapshot=>renderProject(value,snapshot.revision,snapshot.source,await projectAssets(value.id,actor,value),actor,run.id)):run.kind==='transcription'?transcribeTimelineClip(value,actor,requestContext,run.request.clipId,run.id):run.kind==='snapshot'?projectAssets(value.id,actor,value).then(assets=>snapshotProject(value,assets,actor,run.id,run.request.frames)):agentRun(value,actor,requestContext,run.request.message,run.request.selection,run.id));return getRun(run.id)
   }
   const reusable=run.steps.map((s:any)=>s.result?.assetId).filter(Boolean)
   const retryMessage=run.kind==='agent'&&reusable.length?`${run.request.message}\n恢复说明：此前已生成素材 ${reusable.join('、')}，先查看素材库并复用这些产物，避免重复生成。`:run.request.message
   const next=await createRun(value.id,actor,ctx,run.kind,{...run.request,message:retryMessage,context:ctx,retryOf:run.id})
-  enqueue(next.id,()=>run.kind==='generation'?projectAssets(value.id,actor,value).then(assets=>generateAsset(run.request.tool,run.request.args,value,actor,assets,next.id,'generation')):run.kind==='export'?revision(value.id,ctx.expectedRevision).then(async snapshot=>renderProject(value,snapshot.revision,snapshot.source,await projectAssets(value.id,actor,value),actor,next.id)):run.kind==='snapshot'?projectAssets(value.id,actor,value).then(assets=>snapshotProject(value,assets,actor,next.id,run.request.frames)):agentRun(value,actor,ctx,retryMessage,run.request.selection,next.id));return next
+  enqueue(next.id,()=>run.kind==='generation'?projectAssets(value.id,actor,value).then(assets=>generateAsset(run.request.tool,run.request.args,value,actor,assets,next.id,'generation')):run.kind==='export'?revision(value.id,ctx.expectedRevision).then(async snapshot=>renderProject(value,snapshot.revision,snapshot.source,await projectAssets(value.id,actor,value),actor,next.id)):run.kind==='transcription'?transcribeTimelineClip(value,actor,ctx,run.request.clipId,next.id):run.kind==='snapshot'?projectAssets(value.id,actor,value).then(assets=>snapshotProject(value,assets,actor,next.id,run.request.frames)):agentRun(value,actor,ctx,retryMessage,run.request.selection,next.id));return next
 })
 app.all(base+'/projects/:id/studio/*',async(request:any,reply)=>{const {value,actor}=await projectRequest(request,['GET','HEAD'].includes(request.method)?'view':'edit');return proxyStudio(request,reply,value,actor,await projectAssets(value.id,actor,value))})
 app.server.on('upgrade',async(request,socket,head)=>{
