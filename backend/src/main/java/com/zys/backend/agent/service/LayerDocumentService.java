@@ -381,11 +381,19 @@ public class LayerDocumentService {
                     && Boolean.TRUE.equals(only.getBool("visible", true))
                     && Math.abs(only.getDouble("rotation", 0.0)) < 0.001
                     && Math.abs(only.getDouble("scaleX", 1.0) - 1.0) < 0.001
-                    && Math.abs(only.getDouble("scaleY", 1.0) - 1.0) < 0.001) {
+                    && Math.abs(only.getDouble("scaleY", 1.0) - 1.0) < 0.001
+                    && Math.abs(only.getDouble("x", 0.0)) < 0.001
+                    && Math.abs(only.getDouble("y", 0.0)) < 0.001
+                    && Math.abs(only.getDouble("opacity", 1.0) - 1.0) < 0.001
+                    && Math.abs(only.getDouble("width", 0.0) - document.getInt("width", 0)) < 0.001
+                    && Math.abs(only.getDouble("height", 0.0) - document.getInt("height", 0)) < 0.001) {
                 Long assetId = parseAssetId(only.get("assetId"));
                 if (assetId != null) {
                     PictureAgentAsset asset = assetService.getInSession(session.getId(), assetId);
-                    return assetService.loadBytes(asset);
+                    if (asset != null && java.util.Objects.equals(asset.getWidth(), document.getInt("width"))
+                            && java.util.Objects.equals(asset.getHeight(), document.getInt("height"))) {
+                        return assetService.loadBytes(asset);
+                    }
                 }
             }
         }
