@@ -13,6 +13,7 @@ import {authorize,type Actor} from './auth.js'
 import { ApiError, invariant } from './errors.js'
 import { json } from './db.js'
 import { executionReceipt } from './agent-result.js'
+import { plannerFailureMessage } from './planner-error.js'
 
 const tools = [
   {name:'inspect_project',description:'查看项目、素材、整数帧时间线，24fps',parameters:{type:'object',properties:{},additionalProperties:false}},
@@ -38,7 +39,7 @@ export async function agentRun(project:any,actor:Actor,context:WriteContext,mess
   for(let round=0;round<config.agentMaxRounds;round++) {
     if(await cancelled(runId))throw new ApiError(409,'RUN_CANCELLED','编辑任务已取消')
     const response=await fetch(`${config.llmUrl.replace(/\/$/,'')}/chat/completions`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${config.llmKey}`},body:JSON.stringify({model:config.llmModel,messages:chat,tools,tool_choice:'auto',temperature:.1,parallel_tool_calls:false}),signal:AbortSignal.timeout(120_000)})
-    if(!response.ok)throw new ApiError(502,'LLM_FAILED',`对话规划失败 (${response.status})`)
+    if(!response.ok)throw new ApiError(502,'LLM_FAILED',plannerFailureMessage(response.status,await response.text()))
     const envelope=await response.json() as any,turn=envelope.choices?.[0]?.message
     invariant(turn,'对话模型没有返回消息');chat.push(turn)
     if(!turn.tool_calls?.length){answer=turn.content||'编辑完成';finished=true;break}
