@@ -4,9 +4,9 @@ import {resolve} from 'node:path'
 import mysql from 'mysql2/promise'
 import {config,dataRoot} from './config.js'
 import { db,rows,json } from './db.js'
-export const videoTables=['video_project','video_revision','video_quota','video_object','video_asset','video_record','video_run','video_step','video_event','video_idempotency','video_migration'] as const
+export const videoTables=['video_project','video_revision','video_quota','video_object','video_asset','video_record','video_run','video_step','video_event','video_idempotency','video_migration','video_annotation_member'] as const
 export async function migrate() {
-  for(const name of ['001-video.sql','002-utc-clock.sql']){
+  for(const name of ['001-video.sql','002-utc-clock.sql','003-annotations.sql']){
     const sql = await readFile(fileURLToPath(new URL('../migrations/'+name, import.meta.url)), 'utf8')
     for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await db.query(statement)
   }

@@ -22,6 +22,7 @@ export async function createProject(actor: Actor, name: string, spaceId?: string
   const id = randomUUID(), source = sourceFor(emptyState(), [])
   await checkSource(id,source,[])
   await transaction(async connection => {
+    if(spaceId) invariant((await rows('SELECT id FROM space WHERE id=? AND isDelete=0 FOR UPDATE',[spaceId],connection))[0], '空间已被删除，无法创建工程')
     await connection.query('INSERT INTO video_project(id,space_id,owner_id,name) VALUES (?,?,?,?)',[id,spaceId||null,actor.userId,name.slice(0,200)||'未命名视频'])
     await connection.query('INSERT INTO video_revision(project_id,revision,source,author_id,message) VALUES (?,1,?,?,?)',[id,JSON.stringify(source),actor.userId,'创建项目'])
   })
@@ -38,6 +39,8 @@ export async function lease(id: string, actor: Actor, action: string, sessionId:
     const record = (await rows('SELECT * FROM video_project WHERE id=? FOR UPDATE',[id],connection))[0]!
     const alive = record.lease_until && new Date(record.lease_until).getTime() > Date.now()
     if (action === 'acquire') {
+      const annotators = await rows('SELECT session_id FROM video_annotation_member WHERE project_id=? AND lease_until>UTC_TIMESTAMP(3)',[id],connection)
+      if(annotators.length) throw new ApiError(409,'ANNOTATIONS_BUSY','成员正在编辑字幕 / 贴图，请等待成员退出后再剪辑视频')
       if (alive && (String(record.lease_user_id)!==actor.userId || record.lease_session && record.lease_session!==sessionId)) throw new ApiError(409,'LEASE_BUSY','其他会话正在编辑',{userId:String(record.lease_user_id),until:record.lease_until})
       if (!(alive && record.lease_session===sessionId)) record.lease_epoch=Number(record.lease_epoch)+1
       await connection.query('UPDATE video_project SET lease_user_id=?,lease_session=?,lease_epoch=?,lease_until=DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 60 SECOND) WHERE id=?',[actor.userId,sessionId,record.lease_epoch,id])

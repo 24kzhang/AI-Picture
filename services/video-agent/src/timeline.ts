@@ -12,6 +12,7 @@ export const clipSchema = z.object({
   muted: z.boolean().default(false), fadeIn: frame.default(0), fadeOut: frame.default(0),
   text: z.string().max(2000).optional(), fontSize: z.number().min(8).max(300).default(42), color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default('#ffffff'),
   subtitle: z.boolean().optional(), precision: z.enum(['character', 'sentence']).optional(),
+  overlay: z.boolean().optional(),
 }).strict()
 export const stateSchema = z.object({ fps: z.literal(24), width: z.number().int().positive().max(2048), height: z.number().int().positive().max(2048),
   tracks: z.array(z.object({ id: z.string().min(1).max(100), name: z.string().max(100), kind: z.enum(['visual', 'audio', 'text']) }).strict()).min(1).max(30),
@@ -21,7 +22,7 @@ export type Clip = z.infer<typeof clipSchema>
 export type State = z.infer<typeof stateSchema>
 export type Asset = { id: string; name: string; kind: 'video' | 'image' | 'audio'; frames: number; width: number; height: number; hasAudio: boolean; path: string; audioPath?: string; objectKey?: string; posterKey?: string; originalKey?: string; audioKey?: string; size: number; [key: string]: any }
 export const operationSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('insert_clip'), assetId: z.string().uuid().optional(), trackId: z.string(), at: frame, length: frame.positive().optional(), in: frame.optional(), text: z.string().max(2000).optional(), replaceOriginal: z.boolean().optional() }).strict(),
+  z.object({ type: z.literal('insert_clip'), assetId: z.string().uuid().optional(), trackId: z.string(), at: frame, length: frame.positive().optional(), in: frame.optional(), text: z.string().max(2000).optional(), replaceOriginal: z.boolean().optional(), overlay: z.boolean().optional() }).strict(),
   z.object({ type: z.literal('trim_clip'), clipId: z.string().uuid(), at: frame, length: frame.positive() }).strict(),
   z.object({ type: z.literal('split_clip'), clipId: z.string().uuid(), frame }).strict(),
   z.object({ type: z.literal('move_clip'), clipId: z.string().uuid(), at: frame, trackId: z.string().optional() }).strict(),
@@ -81,7 +82,7 @@ export function applyOperations(current: State, raw: unknown[], assets: Asset[],
       const kind = op.text !== undefined ? 'text' : asset!.kind
       const length = op.length ?? (kind === 'image' || kind === 'text' ? 72 : asset!.frames - (op.in ?? 0))
       const link = kind === 'video' && asset?.hasAudio ? randomUUID() : undefined
-      const clip = clipSchema.parse({ id: randomUUID(), name: asset?.name || '文字', assetId: asset?.id, kind, trackId: op.trackId, at: op.at, length, in: op.in ?? 0, text: op.text, link })
+      const clip = clipSchema.parse({ id: randomUUID(), name: asset?.name || '文字', assetId: asset?.id, kind, trackId: op.trackId, at: op.at, length, in: op.in ?? 0, text: op.text, link, overlay: op.overlay })
       if(kind==='audio'&&(asset?.purpose==='speech'||op.trackId==='voice')&&op.replaceOriginal!==false){
         // Split the linked picture/audio/captions at both replacement boundaries, retaining source-in.
         for(const boundary of [clip.at,clip.at+clip.length]){

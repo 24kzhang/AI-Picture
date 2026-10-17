@@ -26,6 +26,7 @@ import { proxyStudio, closeStudios, studioSession } from './studio.js'
 import {cloneVariant} from './variants.js'
 import {snapshotProject} from './snapshots.js'
 import {transcribeTimelineClip} from './transcription.js'
+import {annotationMembers, annotationLimit, annotationLease, operateAnnotations} from './annotations.js'
 
 export const app=Fastify({logger:{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-video-service-key']},bodyLimit:2*1024**2})
 await app.register(multipart,{limits:{fileSize:config.maxAssetBytes,files:1,fields:8}})
@@ -72,6 +73,9 @@ app.post(base+'/projects/:id/hypit/template',async(request:any)=>{const {value,a
 app.get(base+'/projects/:id/hypit/vocabulary/:package',async(request:any)=>{const {value,actor}=await projectRequest(request),assets=await projectAssets(value.id,actor,value),workspace=await writeWorkspace(value.id,'vocabulary',(await revision(value.id)).source,assets);return vocabulary(request.params.package,workspace)})
 app.get(base+'/projects/:id/hypit/builds/:build/:action',async(request:any)=>{const {value,actor}=await projectRequest(request);invariant((await rows('SELECT s.run_id FROM video_step s JOIN video_run r ON r.id=s.run_id WHERE r.project_id=? AND s.build_id=?',[value.id,request.params.build]))[0],'Build 不属于本项目');const action=z.enum(['status','inspect','logs']).parse(request.params.action),workspace=await writeWorkspace(value.id,'inspect',(await revision(value.id)).source,await projectAssets(value.id,actor,value));const {hypit}=await import('./hypit.js');const output=await hypit([action,request.params.build,...(action==='logs'?['--lines','100']:action==='status'?['--runtime',resolve(workspace,'hypit.runtime.json')]:[])],workspace);try{return JSON.parse(output)}catch{return {text:output}}})
 app.post(base+'/projects/:id/operations',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body),operations=z.array(z.unknown()).min(1).max(100).parse(request.body.operations);return operate(value.id,actor,ctx,await projectAssets(value.id,actor,value),operations)})
+app.get(base+'/projects/:id/annotations',async(request:any)=>{const {value}=await projectRequest(request);return {members:await annotationMembers(value.id),limit:annotationLimit,serverTime:Date.now()}})
+app.post(base+'/projects/:id/annotations/lease',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),input=z.object({action:z.enum(['acquire','renew','release']),sessionId:z.string().uuid(),epoch:z.number().int().nonnegative().optional()}).parse(request.body);return annotationLease(value.id,actor,input.action,input.sessionId,input.epoch)})
+app.post(base+'/projects/:id/annotations/operations',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body),operations=z.array(z.unknown()).min(1).max(100).parse(request.body.operations);return operateAnnotations(value.id,actor,ctx,await projectAssets(value.id,actor,value),operations)})
 app.post(base+'/projects/:id/lease',async(request:any)=>{
   const {value,actor}=await projectRequest(request,'edit'),input=z.object({action:z.enum(['acquire','renew','release','handoff']),sessionId:z.string().uuid(),epoch:z.number().int().nonnegative().optional(),targetId:z.string().regex(/^\d+$/).optional()}).parse(request.body)
   if(input.action==='handoff')await bridge(actor.cookie,'/handoff-target',{spaceId:value.space_id,ownerId:value.owner_id,targetId:input.targetId})
@@ -130,8 +134,22 @@ app.post(base+'/videos',async(request:any)=>{
   })
 })
 app.delete(base+'/videos/:id',async(request:any)=>{const {value,actor}=await videoRequest(request,'delete'),ctx=context(request.body);await transaction(async connection=>{const owner=(await rows('SELECT * FROM video_project WHERE id=? FOR UPDATE',[value.project_id],connection))[0]!;assertWrite(owner,actor,ctx);const result=(await rows('SELECT deleted FROM video_record WHERE id=? FOR UPDATE',[value.id],connection))[0]!;if(!result.deleted){await connection.query('UPDATE video_record SET deleted=TRUE WHERE id=?',[value.id]);await connection.query('UPDATE video_quota SET video_count=GREATEST(0,video_count-1) WHERE scope=?',[value.space_id?`space-${value.space_id}`:`public-${value.owner_id}`])}});return {deleted:true,retainedProject:true}})
-app.post(base+'/videos/:id/review',async(request:any)=>{const {value,actor}=await videoRequest(request);if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以审核视频');const status=z.union([z.literal(1),z.literal(2)]).parse(request.body.reviewStatus);await db.query("UPDATE video_record SET review_status=?,review_source='manual',reviewer_id=?,reviewer_name=?,review_message=?,review_time=UTC_TIMESTAMP(3),review_version=review_version+1 WHERE id=? AND deleted=FALSE",[status,actor.userId,actor.userName||'管理员',status===1?'管理员审核通过':'管理员审核拒绝',value.id]);return {reviewStatus:status}})
-app.post(base+'/videos/:id/ai-review',async(request:any)=>{const {value,actor}=await videoRequest(request);if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以重新提交AI审核');await db.query("UPDATE video_record SET review_status=0,review_source='pending',reviewer_name='AI审核',reviewer_id=NULL,review_message='等待AI审核',review_time=NULL,review_version=review_version+1 WHERE id=? AND deleted=FALSE",[value.id]);return {queued:true}})
+app.post(base+'/videos/:id/review',async(request:any)=>{
+  const {value,actor}=await videoRequest(request)
+  if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以审核视频')
+  const status=z.union([z.literal(1),z.literal(2)]).parse(request.body.reviewStatus),expected=z.coerce.number().int().nonnegative().parse(request.body.expectedReviewVersion)
+  const [changed]=await db.query<any>("UPDATE video_record SET review_status=?,review_source='manual',reviewer_id=?,reviewer_name=?,review_message=?,review_time=UTC_TIMESTAMP(3),review_version=review_version+1 WHERE id=? AND deleted=FALSE AND review_version=?",[status,actor.userId,actor.userName||'管理员',status===1?'管理员审核通过':'管理员审核拒绝',value.id,expected])
+  if(!changed.affectedRows)throw new ApiError(409,'REVIEW_CONFLICT','视频审核状态已改变，请刷新后重新确认')
+  return {reviewStatus:status}
+})
+app.post(base+'/videos/:id/ai-review',async(request:any)=>{
+  const {value,actor}=await videoRequest(request)
+  if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以重新提交AI审核')
+  const expected=z.coerce.number().int().nonnegative().parse(request.body.expectedReviewVersion)
+  const [changed]=await db.query<any>("UPDATE video_record SET review_status=0,review_source='pending',reviewer_name='AI审核',reviewer_id=NULL,review_message='等待AI审核',review_time=NULL,review_version=review_version+1 WHERE id=? AND deleted=FALSE AND review_version=?",[value.id,expected])
+  if(!changed.affectedRows)throw new ApiError(409,'REVIEW_CONFLICT','视频审核状态已改变，请刷新后重新确认')
+  return {queued:true}
+})
 app.post(base+'/projects/:id/messages',async(request:any)=>{
   const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body)
   const message=z.string().min(1).max(4000).parse(request.body.message),selection=request.body.selection||{}

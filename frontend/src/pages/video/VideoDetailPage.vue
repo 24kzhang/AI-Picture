@@ -3,8 +3,8 @@
 import {computed,onMounted,onBeforeUnmount,ref} from 'vue';import {useRoute,useRouter} from 'vue-router';import {useLoginUserStore} from '@/stores/useLoginUserStore';import {videoApi,videoBase,frameTime,type VideoRecord} from '@/api/videoEditor'
 const route=useRoute(),router=useRouter(),record=ref<VideoRecord>(),reviewing=ref(false),loading=ref(true),error=ref(''),store=useLoginUserStore(),admin=computed(()=>store.loginUser.userRole==='admin')
 async function load(){try{record.value=await videoApi(`/videos/${route.params.id}`)}catch(e){error.value=(e as Error).message}finally{loading.value=false}}
-async function review(status:number){if(reviewing.value)return;reviewing.value=true;try{await videoApi(`/videos/${record.value!.id}/review`,{reviewStatus:status});await load()}catch(e){error.value=(e as Error).message}finally{reviewing.value=false}}
-async function requestAiReview(){if(reviewing.value)return;reviewing.value=true;try{await videoApi(`/videos/${record.value!.id}/ai-review`,{});await load()}catch(e){error.value=(e as Error).message}finally{reviewing.value=false}}
+async function review(status:number){if(reviewing.value)return;reviewing.value=true;try{await videoApi(`/videos/${record.value!.id}/review`,{reviewStatus:status,expectedReviewVersion:Number(record.value!.review_version)});await load()}catch(e){error.value=(e as Error).message;await load()}finally{reviewing.value=false}}
+async function requestAiReview(){if(reviewing.value)return;reviewing.value=true;try{await videoApi(`/videos/${record.value!.id}/ai-review`,{expectedReviewVersion:Number(record.value!.review_version)});await load()}catch(e){error.value=(e as Error).message;await load()}finally{reviewing.value=false}}
 let poll:ReturnType<typeof setInterval>|undefined
 onMounted(async()=>{await load();poll=setInterval(()=>{if(record.value?.review_status===0&&!reviewing.value)void load()},5000)})
 onBeforeUnmount(()=>{if(poll)clearInterval(poll)})
