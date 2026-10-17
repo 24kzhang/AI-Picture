@@ -3,7 +3,7 @@ export const videoBase = '/api/video-editor'
 export interface VideoAsset { id:string;name:string;kind:'video'|'image'|'audio';frames:number;width:number;height:number;hasAudio:boolean;size:number;posterKey?:string;purpose?:'speech' }
 export interface VideoClip {id:string;trackId:string;assetId?:string;kind:'video'|'image'|'audio'|'text';name:string;at:number;length:number;in:number;link?:string;sourceClipId?:string;x:number;y:number;scale:number;fit:'contain'|'cover'|'stretch';volume:number;muted:boolean;fadeIn:number;fadeOut:number;text?:string;fontSize:number;color:string;subtitle?:boolean;precision?:string}
 export interface VideoState {fps:24;width:number;height:number;tracks:{id:string;name:string;kind:'visual'|'audio'|'text'}[];clips:VideoClip[]}
-export interface VideoRecord {id:string;name:string;project_id:string;revision:number;review_status:number;metadata:{frames:number;fps?:number;width:number;height:number;size:number;posterKey?:string}}
+export interface VideoRecord {id:string;name:string;project_id:string;revision:number;review_status:number;review_source?:string;reviewer_name?:string;review_message?:string;review_time?:string;metadata:{frames:number;fps?:number;width:number;height:number;size:number;posterKey?:string}}
 export async function videoApi<T=any>(path:string,body?:unknown,method?:string):Promise<T> {
   const response=await fetch(videoBase+path,{method:method||(body?'POST':'GET'),credentials:'include',headers:body instanceof FormData?{}:{'Content-Type':'application/json'},body:body instanceof FormData?body:body?JSON.stringify(body):undefined})
   let value:any

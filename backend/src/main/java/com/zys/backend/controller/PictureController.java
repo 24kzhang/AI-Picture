@@ -239,6 +239,10 @@ public class PictureController {
         // 获取权限列表
         User loginUser = userService.getLoginUser(request);
         List<String> permissionList = spaceUserAuthManager.getPermissionList(space, loginUser);
+        if (spaceId == null && picture.getReviewStatus() != null && !Integer.valueOf(1).equals(picture.getReviewStatus())
+                && !loginUser.getId().equals(picture.getUserId()) && !userService.isAdmin(loginUser)) {
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "图片未通过审核");
+        }
         // 公共图库按图片归属授予编辑入口，不能仅使用没有图片上下文的空间权限。
         if (spaceId == null && loginUser.getId().equals(picture.getUserId())) {
             permissionList = new ArrayList<>(permissionList);

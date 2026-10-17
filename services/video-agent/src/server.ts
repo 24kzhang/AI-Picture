@@ -19,6 +19,7 @@ import { projectAssets, importAsset, importPicture } from './assets.js'
 import { duration } from './timeline.js'
 import { createRun, getRun, events, enqueue, event, setStatus, recoverRuns, resumeRun, resumedRequest, cancelRun } from './runs.js'
 import { agentRun } from './agent.js'
+import { startModeration } from './moderation.js'
 import { generateAsset, modelSchemas, modelHealth, voices } from './providers.js'
 import { renderProject } from './render.js'
 import { proxyStudio, closeStudios, studioSession } from './studio.js'
@@ -123,13 +124,14 @@ app.post(base+'/videos',async(request:any)=>{
     assertWrite(locked,actor,ctx)
     await connection.query('INSERT IGNORE INTO video_quota(scope) VALUES (?)',[scope]);const quota=(await rows('SELECT * FROM video_quota WHERE scope=? FOR UPDATE',[scope],connection))[0]!
     if(quota.video_count>=config.quotaCount)throw new ApiError(413,'VIDEO_COUNT_EXCEEDED','视频数量配额不足')
-    const id=randomUUID();await connection.query('INSERT INTO video_record(id,project_id,revision,space_id,owner_id,name,metadata,review_status) VALUES (?,?,?,?,?,?,?,?)',[id,value.id,input.revision,value.space_id,value.owner_id,input.name,JSON.stringify(metadata),value.space_id||actor.admin?1:0])
-    await connection.query('UPDATE video_quota SET video_count=video_count+1 WHERE scope=?',[scope]);const result={id,reviewStatus:value.space_id||actor.admin?1:0}
+    const id=randomUUID();await connection.query('INSERT INTO video_record(id,project_id,revision,space_id,owner_id,name,metadata,review_status,review_source,reviewer_name,review_message) VALUES (?,?,?,?,?,?,?,?,?,?,?)',[id,value.id,input.revision,value.space_id,value.owner_id,input.name,JSON.stringify(metadata),0,'pending','AI审核','等待AI审核'])
+    await connection.query('UPDATE video_quota SET video_count=video_count+1 WHERE scope=?',[scope]);const result={id,reviewStatus:0}
     await connection.query('INSERT INTO video_idempotency(project_id,request_key,digest,response) VALUES (?,?,?,?)',[value.id,input.idempotencyKey,digest,JSON.stringify(result)]);return result
   })
 })
 app.delete(base+'/videos/:id',async(request:any)=>{const {value,actor}=await videoRequest(request,'delete'),ctx=context(request.body);await transaction(async connection=>{const owner=(await rows('SELECT * FROM video_project WHERE id=? FOR UPDATE',[value.project_id],connection))[0]!;assertWrite(owner,actor,ctx);const result=(await rows('SELECT deleted FROM video_record WHERE id=? FOR UPDATE',[value.id],connection))[0]!;if(!result.deleted){await connection.query('UPDATE video_record SET deleted=TRUE WHERE id=?',[value.id]);await connection.query('UPDATE video_quota SET video_count=GREATEST(0,video_count-1) WHERE scope=?',[value.space_id?`space-${value.space_id}`:`public-${value.owner_id}`])}});return {deleted:true,retainedProject:true}})
-app.post(base+'/videos/:id/review',async(request:any)=>{const {value,actor}=await videoRequest(request);if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以审核视频');const status=z.union([z.literal(1),z.literal(2)]).parse(request.body.reviewStatus);await db.query('UPDATE video_record SET review_status=? WHERE id=?',[status,value.id]);return {reviewStatus:status}})
+app.post(base+'/videos/:id/review',async(request:any)=>{const {value,actor}=await videoRequest(request);if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以审核视频');const status=z.union([z.literal(1),z.literal(2)]).parse(request.body.reviewStatus);await db.query("UPDATE video_record SET review_status=?,review_source='manual',reviewer_id=?,reviewer_name=?,review_message=?,review_time=UTC_TIMESTAMP(3),review_version=review_version+1 WHERE id=? AND deleted=FALSE",[status,actor.userId,actor.userName||'管理员',status===1?'管理员审核通过':'管理员审核拒绝',value.id]);return {reviewStatus:status}})
+app.post(base+'/videos/:id/ai-review',async(request:any)=>{const {value,actor}=await videoRequest(request);if(!actor.admin)throw new ApiError(403,'ADMIN_REQUIRED','仅管理员可以重新提交AI审核');await db.query("UPDATE video_record SET review_status=0,review_source='pending',reviewer_name='AI审核',reviewer_id=NULL,review_message='等待AI审核',review_time=NULL,review_version=review_version+1 WHERE id=? AND deleted=FALSE",[value.id]);return {queued:true}})
 app.post(base+'/projects/:id/messages',async(request:any)=>{
   const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body)
   const message=z.string().min(1).max(4000).parse(request.body.message),selection=request.body.selection||{}
@@ -208,6 +210,7 @@ app.server.on('upgrade',async(request,socket,head)=>{
 })
 await migrate();await recoverRuns()
 await app.listen({port:config.port,host:config.host})
-const close=async()=>{closeStudios();await app.close();await db.end();process.exit(0)};process.on('SIGINT',close);process.on('SIGTERM',close)
+const stopModeration=startModeration()
+const close=async()=>{stopModeration();closeStudios();await app.close();await db.end();process.exit(0)};process.on('SIGINT',close);process.on('SIGTERM',close)
 
 

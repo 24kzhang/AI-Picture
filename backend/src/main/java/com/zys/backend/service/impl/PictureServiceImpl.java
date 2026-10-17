@@ -406,10 +406,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         // 2. 判断图片是否存在
         Picture oldPicture = this.getById(id);
         ThrowUtils.throwIf(oldPicture == null, ErrorCode.NOT_FOUND_ERROR);
-        // 3. 校验审核状态是否重复，已是该状态
-        if (oldPicture.getReviewStatus().equals(reviewStatus)) {
-            throw new BusinessException(ErrorCode.PARAMS_ERROR, "请勿重复审核");
-        }
+        // 管理员可确认或覆盖任意 AI 审核结果，包括相同状态。
         // 4. 数据库操作
         Picture updatePicture = new Picture();
         BeanUtil.copyProperties(pictureReviewRequest, updatePicture);
@@ -427,16 +424,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
      */
     @Override
     public void fillReviewParams(Picture picture, User loginUser) {
-        if (userService.isAdmin(loginUser)) {
-            // 管理员自动过审
-            picture.setReviewStatus(PictureReviewStatusEnum.PASS.getValue());
-            picture.setReviewerId(loginUser.getId());
-            picture.setReviewMessage("管理员自动过审");
-            picture.setReviewTime(new Date());
-        } else {
-            // 非管理员，无论是编辑还是创建默认都是待审核
-            picture.setReviewStatus(PictureReviewStatusEnum.REVIEWING.getValue());
-        }
+        picture.setReviewStatus(PictureReviewStatusEnum.REVIEWING.getValue());
+        picture.setReviewerId(0L);
+        picture.setReviewMessage("等待AI审核");
+        picture.setReviewTime(new Date());
     }
 
     /**

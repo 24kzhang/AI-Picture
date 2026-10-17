@@ -71,7 +71,7 @@
         <template v-if="column.dataIndex === 'reviewMessage'">
           <div>审核状态: {{ PIC_REVIEW_STATUS_MAP[record.reviewStatus] }}</div>
           <div>审核信息: {{ record.reviewMessage }}</div>
-          <div>审核人: {{ record.reviewerId }}</div>
+          <div>审核人: {{ String(record.reviewerId) === '0' ? 'AI审核' : record.reviewerId || '—' }}</div>
           <div v-if="record.reviewTime">
             审核时间: {{ dayjs(record.reviewTime).format('YYYY-MM-DD HH:mm:ss') }}
           </div>
@@ -86,15 +86,15 @@
         <template v-else-if="column.key === 'action'">
           <a-space wrap>
             <a-button
-              v-if="record.reviewStatus !== PIC_REVIEW_STATUS_ENUM.PASS"
               @click="handleReview(record, PIC_REVIEW_STATUS_ENUM.PASS)"
             >
-              通过
+              人工通过
             </a-button>
             <a-button danger @click="handleReview(record, PIC_REVIEW_STATUS_ENUM.REJECT)">
-              拒绝
+              人工拒绝
             </a-button>
 
+            <a-button :loading="aiReviewId===String(record.id)" @click="requestAiReview(record)">AI审核</a-button>
             <a-button type="link" :href="`/add_picture?id=${record.id}`" target="_blank">
               编辑
             </a-button>
@@ -181,6 +181,17 @@ const columns = [
 ]
 
 // 定义数据 图片管理 表格数据
+const aiReviewId=ref('')
+const requestAiReview=async(record:API.Picture)=>{
+  aiReviewId.value=String(record.id)
+  try{
+    const response=await fetch('/api/picture/ai-review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:String(record.id)})})
+    const result=await response.json()
+    if(result.code!==0)throw Error(result.message)
+    message.success('已提交AI审核，稍后刷新查看结果')
+    await fetchData()
+  }catch(e){message.error((e as Error).message)}finally{aiReviewId.value=''}
+}
 const dataList = ref<API.Picture[]>([])
 const total = ref(0)
 // 搜索条件
