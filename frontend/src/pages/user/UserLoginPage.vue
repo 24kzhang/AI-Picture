@@ -23,14 +23,14 @@
       </div>
       <!-- 登录按钮 -->
       <a-form-item>
-        <a-button type="primary" html-type="submit" style="width: 100%">登录</a-button>
+        <a-button type="primary" html-type="submit" :loading="submitting" style="width: 100%">登录</a-button>
       </a-form-item>
     </a-form>
   </div>
 </template>
 
 <script lang="ts" setup>
-import { reactive } from 'vue'
+import { reactive, ref } from 'vue'
 import { userLoginUsingPost } from '@/api/userController.ts'
 import { useLoginUserStore } from '@/stores/useLoginUserStore.ts'
 import { message } from 'ant-design-vue'
@@ -43,23 +43,30 @@ const formState = reactive<API.UserLoginRequest>({
 })
 
 const loginUserStore = useLoginUserStore()
+const submitting = ref(false)
 
 /**
  * 登录提交
  * @param values
  */
 const handleSubmit = async (values: any) => {
-  const res = await userLoginUsingPost(values)
-  // 登录成功，把登录态保存到全局状态中
-  if (res.data.code === 0 && res.data.data) {
-    await loginUserStore.fetchLoginUser()
-    message.success('登录成功')
-    await router.push({
-      path: '/',
-      replace: true,
-    })
-  } else {
-    message.error('登录失败' + res.data.message)
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    const res = await userLoginUsingPost(values, { timeout: 10000 })
+    if (res.data.code === 0 && res.data.data) {
+      loginUserStore.setLoginUser(res.data.data)
+      message.success('登录成功')
+      await router.push({ path: '/', replace: true })
+    } else {
+      message.error('登录失败：' + (res.data.message || '请检查账号和密码'))
+    }
+  } catch (error: any) {
+    if (error.code !== 'ECONNABORTED') {
+      message.error('登录服务暂不可用，请稍后重试')
+    }
+  } finally {
+    submitting.value = false
   }
 }
 </script>
