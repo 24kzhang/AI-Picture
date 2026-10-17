@@ -16,6 +16,8 @@ import { executionReceipt } from './agent-result.js'
 import { requestPlannerTurn } from './planner-client.js'
 import { plannerSourceFiles, preserveSourceMetadata, replaceSourceText } from './source-edits.js'
 
+import { LTX_CLIP_GUIDANCE } from './ltx-policy.js'
+
 const tools = [
   {name:'inspect_project',description:'查看项目、素材、整数帧时间线，24fps',parameters:{type:'object',properties:{},additionalProperties:false}},
   {name:'inspect_sources',description:'读取完整 Hypit 源文件集合、入口和工程模式。工程模式必须通过 update_sources 编辑，不能使用基础 clip 操作。',parameters:{type:'object',properties:{},additionalProperties:false}},
@@ -35,6 +37,7 @@ export async function agentRun(project:any,actor:Actor,context:WriteContext,mess
   let nativeSource:SourceBundle|undefined=current.source.mode==='hypit'?current.source:undefined
   const chat:any[]=[{role:'system',content:'你是云图库的视频剪辑助手。用给定工具完成用户要求。全部时间使用24fps整数帧、左闭右开。只能引用项目已有素材、轨道和片段ID；不要编造。视频原声已独立导入且默认联动，降低音乐只修改音乐轨。保留前3秒是trim_clip(at=原位置,length=72)，不能忽略素材入点。生成任务返回新素材，之后可插入。配音使用实际素材时长，覆盖原声区间需明确静音对应原声音轨。无必要不要生成素材。解释失败，不能声称未执行的操作完成。'},
     {role:'user',content:JSON.stringify({message,project:{id:project.id,revision:current.revision,mode:current.source.mode||'timeline',state:candidate,assets:assets.map(({path,audioPath,...a})=>a)},selection})}]
+  chat[0].content+=' '+LTX_CLIP_GUIDANCE+' 多段生成时每段分别调用 generate_video 并设置合法 num_frames，随后按顺序插入或在源工程中编排。'
   if(nativeSource)chat[0].content+=' 当前是完整 Hypit 工程，先 inspect_sources；按真实源码修改，仅在需要组件语法时使用 component_vocabulary。只改现有文字时直接按原结构修改。禁止基础 clip 操作或转写扁平片段，因为它们不能表达当前完整工程。需要 ASR 时保留现有素材和语义证据，明确说明限制。update_sources 只提交实际修改的文件及其完整内容，不复制未修改文件。图像视频配音生成素材后在源码中引用 ./assets/<id>.<png/mp4/wav>。'
   const availableTools=tools.filter(tool=>nativeSource
     ? ['inspect_project','inspect_sources','component_vocabulary','update_sources','replace_source_text','transcribe_asset','render',...Object.keys(modelSchemas)].includes(tool.function.name)

@@ -19,7 +19,7 @@ import { projectAssets, importAsset, importPicture } from './assets.js'
 import { duration } from './timeline.js'
 import { createRun, getRun, events, enqueue, event, setStatus, recoverRuns, resumeRun, resumedRequest, cancelRun } from './runs.js'
 import { agentRun } from './agent.js'
-import { generateAsset, modelHealth, voices } from './providers.js'
+import { generateAsset, modelSchemas, modelHealth, voices } from './providers.js'
 import { renderProject } from './render.js'
 import { proxyStudio, closeStudios, studioSession } from './studio.js'
 import {cloneVariant} from './variants.js'
@@ -136,7 +136,7 @@ app.post(base+'/projects/:id/messages',async(request:any)=>{
   const run=await createRun(value.id,actor,ctx,'agent',{message,selection});enqueue(run.id,()=>agentRun(value,actor,ctx,message,selection,run.id));return run
 })
 app.post(base+'/projects/:id/exports',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body);const snapshot=await revision(value.id,ctx.expectedRevision),assets=await projectAssets(value.id,actor,value);const run=await createRun(value.id,actor,ctx,'export',{});enqueue(run.id,()=>renderProject(value,snapshot.revision,snapshot.source,assets,actor,run.id));return run})
-app.post(base+'/projects/:id/generate',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body);const tool=z.enum(['generate_image','generate_video','synthesize_speech']).parse(request.body.tool),args=request.body.args;const run=await createRun(value.id,actor,ctx,'generation',{tool,args});enqueue(run.id,async()=>publicAsset(await generateAsset(tool,args,value,actor,await projectAssets(value.id,actor,value),run.id,'generation')));return run})
+app.post(base+'/projects/:id/generate',async(request:any)=>{const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body);const tool=z.enum(['generate_image','generate_video','synthesize_speech']).parse(request.body.tool),args=modelSchemas[tool].parse(request.body.args);const run=await createRun(value.id,actor,ctx,'generation',{tool,args});enqueue(run.id,async()=>publicAsset(await generateAsset(tool,args,value,actor,await projectAssets(value.id,actor,value),run.id,'generation')));return run})
 app.post(base+'/projects/:id/transcribe',async(request:any)=>{
   const {value,actor}=await projectRequest(request,'edit'),ctx=context(request.body)
   const clipId=idSchema.parse(request.body.clipId)

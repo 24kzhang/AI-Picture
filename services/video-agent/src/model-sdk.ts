@@ -5,6 +5,7 @@ import { hypitRoot } from './hypit.js'
 import type { Asset } from './timeline.js'
 import { invariant } from './errors.js'
 import { z } from 'zod'
+import { LTX_MAX_FRAMES, LTX_FRAME_RATE } from './ltx-policy.js'
 export const transcriptSchema=z.object({text:z.string().default(''),language:z.string().default('zh'),segments:z.array(z.object({start:z.number().nullable().optional(),end:z.number().nullable().optional(),text:z.string().default('')}).passthrough()).default([])}).passthrough()
 const asrModule={name:'@gallery/whisper-large-v3-whisperx',version:'1'}
 export const asrContract={module:asrModule,capability:{module:asrModule,name:'transcribe'},returns:{module:asrModule,name:'Transcript'},manifest:{format:'hypit.module@1',...asrModule,dependencies:[],types:[{name:'AudioRequest'},{name:'Transcript'}],capabilities:[{name:'transcribe',returns:{module:asrModule,name:'Transcript'}}],producers:[{name:'transcribe',inputs:[{name:'request',type:{module:asrModule,name:'AudioRequest'}}],outputs:[],needs:[{name:'transcript',capability:{module:asrModule,name:'transcribe'},returns:{module:asrModule,name:'Transcript'}}]}]}}
@@ -21,7 +22,7 @@ export function modelSdk() {
     const media=(name:string,role:string,count=1)=>({name,value:{kind:'media',accepts:[role]},minItems:0,maxItems:count})
     const definitions:any={
       generate_image:{name:'qwen-image-2.1',result:'image',ports:[scalar('prompt',{kind:'text',maxChars:4000},true),number('width',256,2048),number('height',256,2048),number('steps',1,100),number('guidanceScale',0,20,false),number('seed',-2147483648,2147483647),media('images','image',10),media('mask','image'),scalar('maskCue',{kind:'boolean'}),number('maskFeather',0,128),scalar('keepAlpha',{kind:'boolean'})]},
-      generate_video:{name:'ltx-2.5',result:'video',ports:[scalar('prompt',{kind:'text',maxChars:4000},true),number('width',256,2048),number('height',256,2048),number('numFrames',9,2881),number('frameRate',24,24),number('seed',-2147483648,2147483647),media('image','image'),scalar('enhancePrompt',{kind:'boolean'})]},
+      generate_video:{name:'ltx-2.5',result:'video',ports:[scalar('prompt',{kind:'text',maxChars:4000},true),number('width',256,2048),number('height',256,2048),number('numFrames',9,LTX_MAX_FRAMES),number('frameRate',LTX_FRAME_RATE,LTX_FRAME_RATE),number('seed',-2147483648,2147483647),media('image','image'),scalar('enhancePrompt',{kind:'boolean'})]},
       synthesize_speech:{name:'indextts-2.5',result:'audio',ports:[scalar('text',{kind:'text',maxChars:5000},true),scalar('lang',{kind:'enum',values:['ZH','EN','JA','KO','YUE','AUTO']}),scalar('speaker',{kind:'text',maxChars:200}),media('referenceAudio','audio'),number('durationFactor',.5,2,false),number('seed',-1,2147483647),scalar('useEmotionText',{kind:'boolean'}),scalar('emotionText',{kind:'text',maxChars:1000}),number('emotionAlpha',0,1,false)]},
     }
     const models:any={}

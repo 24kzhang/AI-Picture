@@ -12,9 +12,11 @@ import type { Actor } from './auth.js'
 import { command, ffmpegPath } from './hypit.js'
 import { executeModelProvider,executeTranscriptProvider } from './model-sdk.js'
 
+import { LTX_MAX_FRAMES, LTX_FRAME_RATE, LTX_CLIP_GUIDANCE } from './ltx-policy.js'
+
 export const modelSchemas = {
   generate_image: z.object({ prompt:z.string().min(1).max(4000),width:z.number().int().min(256).max(2048).default(1024),height:z.number().int().min(256).max(2048).default(1024),steps:z.number().int().min(1).max(100).default(30),guidance_scale:z.number().min(0).max(20).default(4),seed:z.number().int().optional(),referenceAssetIds:z.array(z.string().uuid()).max(10).optional(),maskAssetId:z.string().uuid().optional(),mask_cue:z.boolean().default(true),mask_feather:z.number().int().min(0).max(128).default(12),keep_alpha:z.boolean().default(true) }).strict(),
-  generate_video:z.object({prompt:z.string().min(1).max(4000),width:z.number().int().min(256).max(2048).multipleOf(32).default(768),height:z.number().int().min(256).max(2048).multipleOf(32).default(512),num_frames:z.number().int().min(9).max(2881).refine(n=>(n-1)%8===0,'帧数必须满足 (n-1)%8=0').default(49),frame_rate:z.literal(24).default(24),seed:z.number().int().default(10),referenceAssetId:z.string().uuid().optional(),enhance_prompt:z.boolean().default(false)}).strict(),
+  generate_video:z.object({prompt:z.string().min(1).max(4000),width:z.number().int().min(256).max(2048).multipleOf(32).default(768),height:z.number().int().min(256).max(2048).multipleOf(32).default(512),num_frames:z.number().int().min(9).max(LTX_MAX_FRAMES,LTX_CLIP_GUIDANCE).refine(n=>(n-1)%8===0,'帧数必须满足 (n-1)%8=0').default(49).describe(LTX_CLIP_GUIDANCE),frame_rate:z.literal(LTX_FRAME_RATE).default(LTX_FRAME_RATE),seed:z.number().int().default(10),referenceAssetId:z.string().uuid().optional(),enhance_prompt:z.boolean().default(false)}).strict(),
   synthesize_speech:z.object({text:z.string().min(1).max(5000),lang:z.enum(['ZH','EN','JA','KO','YUE','AUTO']).default('ZH'),spk_name:z.string().min(1).max(200).default('speaker1_a_cn_16k.wav'),referenceAssetId:z.string().uuid().optional(),duration_factor:z.number().min(.5).max(2).default(1),seed:z.number().int().default(-1),use_emo_text:z.boolean().default(false),emo_text:z.string().max(1000).optional(),emo_alpha:z.number().min(0).max(1).default(.5)}).strict(),
 }
 export type ModelTool = keyof typeof modelSchemas
