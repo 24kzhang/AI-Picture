@@ -32,7 +32,7 @@
 
       <a-card class="query-card" title="查询图片">
         <div class="query-content">
-          <img :alt="picture.name" :src="picture.thumbnailUrl ?? picture.url" class="query-image" />
+          <img :alt="picture.name" :src="galleryImageUrl(picture.thumbnailUrl ?? picture.url)" class="query-image" />
           <div class="query-options">
             <strong>{{ picture.name ?? '加载中…' }}</strong>
             <a-tag :color="picture.spaceId ? 'blue' : 'green'">
@@ -69,7 +69,7 @@
             <router-link :to="item.fromUrl ?? `/picture/${item.pictureId}`">
               <a-card hoverable>
                 <template #cover>
-                  <img :alt="item.name" :src="item.thumbUrl" class="result-image" />
+                  <img :alt="item.name" :src="galleryImageUrl(item.thumbUrl)" class="result-image" />
                 </template>
                 <a-card-meta :title="item.name ?? '未命名图片'">
                   <template #description>
@@ -100,6 +100,7 @@ import {
 } from '@/api/pictureController'
 import { message } from 'ant-design-vue'
 import { useRoute } from 'vue-router'
+import { galleryImageUrl } from '@/utils/galleryImageUrl'
 
 const route = useRoute()
 const pictureId = computed<string | undefined>(() => {
