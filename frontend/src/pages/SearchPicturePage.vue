@@ -15,7 +15,7 @@
       <div class="page-heading">
         <div>
           <h2>智能向量以图搜图</h2>
-          <p>使用服务器视觉向量模型，查找当前图库中的相似图片</p>
+          <p>使用Qwen3-VL-Embedding-2B视觉向量模型，查找当前图库中的相似图片</p>
         </div>
         <a-tag :color="vectorAvailable ? 'green' : 'red'">
           {{ vectorAvailable ? '向量服务正常' : '向量服务不可用' }}
