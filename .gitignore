@@ -16,10 +16,7 @@ backend/httpTest/http-client.env.json
 backend/src/main/resources/biz/vipCode.json
 
 # 简历、面试、技术分析、运行说明及教学资料仅保留本地
-# docs 仅放行 README 用到的演示截图目录，具体文件见下方白名单
-/docs/*
-!/docs/demo/
-/docs/demo/*
+/docs/
 /video/
 /services/video-agent/README.md
 
@@ -55,11 +52,47 @@ docs/*.csv
 *.mov
 *.webm
 
-# README 功能展示截图，其余图片仍保持忽略
-!/docs/demo/search.png
-!/docs/demo/collab.png
-!/docs/demo/handoff.png
-!/docs/demo/ai-result.png
+# 文档与架构图只保留本地；各目录 README 除外
+*.md
+*.mdx
+*.markdown
+*.rst
+*.txt
+!**/requirements*.txt
+!**/CMakeLists.txt
+*.adoc
+*.asciidoc
+*.pdf
+*.doc
+*.docx
+*.odt
+*.ppt
+*.pptx
+*.odp
+*.xls
+*.xlsx
+*.ods
+*.drawio
+*.mmd
+*.mermaid
+*.puml
+*.plantuml
+*.excalidraw
+*.vsd
+*.vsdx
+*.xmind
+*.mm
+*.tex
+*.bib
+*.ipynb
+**/documentation/
+**/diagrams/
+**/architecture/
+**/文档/
+**/架构图/
+**/架构设计/
+!**/README
+!**/[Rr][Ee][Aa][Dd][Mm][Ee].[Mm][Dd]
 
 vector-service/pip-install.*.log
 *.pid
