@@ -10,6 +10,7 @@ import java.util.Date;
 
 @Data
 public class UserVO {
+    private Long mutationVersion;
     /**
      * id
      */

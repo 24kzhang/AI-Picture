@@ -35,6 +35,7 @@ class SystemSettingsServiceTest {
         values.put("redis.database", "1");
         values.put("vector.serviceUrl", "http://127.0.0.1:18001");
 
+        values.put("expectedRevision",String.valueOf(service.getPublicSettings().get("revision")));
         Map<String, Object> result = service.update(values);
         String fileContent = new String(Files.readAllBytes(settingsFile), StandardCharsets.UTF_8);
 
@@ -50,6 +51,7 @@ class SystemSettingsServiceTest {
         SystemSettingsService service = createService(temporaryDirectory.resolve("invalid.properties"));
         Map<String, String> values = new LinkedHashMap<>();
         values.put("redis.port", "70000");
+        values.put("expectedRevision",String.valueOf(service.getPublicSettings().get("revision")));
 
         assertThrows(BusinessException.class, () -> service.update(values));
     }
@@ -60,15 +62,26 @@ class SystemSettingsServiceTest {
         SystemSettingsService service = createService(settingsFile);
         Map<String, String> initial = new LinkedHashMap<>();
         initial.put("redis.password", "temporary-password");
+        initial.put("expectedRevision",String.valueOf(service.getPublicSettings().get("revision")));
         service.update(initial);
 
         Map<String, String> clear = new LinkedHashMap<>();
         clear.put("redis.password", "__CLEAR__");
+        clear.put("expectedRevision",String.valueOf(service.getPublicSettings().get("revision")));
         Map<String, Object> result = service.update(clear);
 
         String fileContent = new String(Files.readAllBytes(settingsFile), StandardCharsets.UTF_8);
         assertTrue(fileContent.contains("redis.password="));
         assertEquals(false, result.get("redisPasswordConfigured"));
+    }
+
+    @Test
+    void staleSettingsCannotOverwriteAnotherWindowsChange() {
+        SystemSettingsService service=createService(temporaryDirectory.resolve("conflict.properties"));
+        String original=String.valueOf(service.getPublicSettings().get("revision"));
+        service.update(Map.of("expectedRevision",original,"redis.port","6380"));
+        assertThrows(BusinessException.class,()->service.update(Map.of("expectedRevision",original,"redis.port","6381")));
+        assertEquals("6380",service.getPublicSettings().get("redisPort"));
     }
 
     private SystemSettingsService createService(Path settingsFile) {

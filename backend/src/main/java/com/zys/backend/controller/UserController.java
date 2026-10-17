@@ -24,6 +24,7 @@ import java.util.List;
 @RestController // 自动把返回值转换为 json 格式
 @RequestMapping("/user")
 public class UserController {
+    @javax.annotation.Resource private com.zys.backend.service.MutationGuard mutationGuard;
     @GetMapping("/health")
     public BaseResponse<String> health() {
         return ResultUtils.success("OK!");
@@ -159,7 +160,10 @@ public class UserController {
         if (deleteRequest == null || deleteRequest.getId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "删除用户ID错误");
         }
-        boolean result = userService.removeById(deleteRequest.getId());
+        mutationGuard.requireVersion(deleteRequest.getExpectedMutationVersion());
+        boolean result = userService.remove(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<User>()
+                .eq("id",deleteRequest.getId()).eq("mutationVersion",deleteRequest.getExpectedMutationVersion()));
+        ThrowUtils.throwIf(!result,ErrorCode.OPERATION_ERROR,"用户已被修改或删除，请刷新后重新确认");
         return ResultUtils.success(result);
     }
 
@@ -178,8 +182,11 @@ public class UserController {
         }
         User user = new User();
         BeanUtil.copyProperties(userUpdateRequest, user);
-        boolean result = userService.updateById(user);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        mutationGuard.requireVersion(userUpdateRequest.getExpectedMutationVersion());
+        user.setMutationVersion(userUpdateRequest.getExpectedMutationVersion()+1);
+        boolean result = userService.update(user,new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<User>()
+                .eq("id",user.getId()).eq("mutationVersion",userUpdateRequest.getExpectedMutationVersion()));
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"用户已被修改或删除，请刷新后重新确认");
         return ResultUtils.success(true);
     }
 

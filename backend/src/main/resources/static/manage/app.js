@@ -15,6 +15,9 @@
     rowMode: 'insert',
     rowEditorMode: 'form',
     editingPrimaryKey: {},
+    rowVersions: new WeakMap(),
+    editingRowVersion: '',
+    redisVersion: '__create__',
     dedupe: null,
   }
 
@@ -159,7 +162,7 @@
     })
     setBusy(button, true, '正在保存…')
     try {
-      await api('/settings', { method: 'POST', body: JSON.stringify(values) })
+      await api('/settings', { method: 'POST', body: JSON.stringify({ ...values, expectedRevision:state.overview.settings.revision }) })
       await loadOverview()
       toast('配置已保存。连接类配置请关闭启动窗口后重新双击 start.bat 生效。')
     } catch (error) {
@@ -243,9 +246,12 @@
 
   async function loadRows() {
     if (!state.selectedTable) return renderDatabase()
+    const requestedTable=state.selectedTable,requestedPage=state.page
     const data = await api(`/database/rows?table=${encodeURIComponent(state.selectedTable)}&page=${state.page}&pageSize=${state.pageSize}`)
+    if(requestedTable!==state.selectedTable||requestedPage!==state.page)return
     state.columns = data.columns || []
     state.primaryKeys = data.primaryKeys || []
+    state.rowVersions = new WeakMap((data.rows || []).map((row,index)=>[row,data.rowVersions[index]]))
     state.rows = data.rows || []
     state.total = Number(data.total || 0)
     renderDatabase()
@@ -399,6 +405,7 @@
   function openRowDialog(mode, row = {}) {
     state.rowMode = mode
     state.editingPrimaryKey = Object.fromEntries(state.primaryKeys.map((key) => [key, row[key]]))
+    state.editingRowVersion = state.rowVersions.get(row)
     $('#row-dialog-title').textContent = mode === 'insert' ? `新增 ${state.selectedTable} 记录` : `编辑 ${state.selectedTable} 记录`
     renderRowForm(mode, row)
     $('#row-dialog').showModal()
@@ -576,6 +583,7 @@
     const path = state.rowMode === 'insert' ? '/database/row/insert' : '/database/row/update'
     const payload = { table: state.selectedTable, values }
     if (state.rowMode === 'edit') payload.primaryKey = state.editingPrimaryKey
+    if (state.rowMode === 'edit') payload.expectedVersion = state.editingRowVersion
     const button = $('#save-row')
     setBusy(button, true, '保存中…')
     try {
@@ -595,7 +603,7 @@
     const primaryKey = Object.fromEntries(state.primaryKeys.map((key) => [key, row[key]]))
     if (!window.confirm(`确认物理删除 ${state.selectedTable} 中的记录？\n${JSON.stringify(primaryKey)}`)) return
     try {
-      await api('/database/row/delete', { method: 'POST', body: JSON.stringify({ table: state.selectedTable, primaryKey }) })
+      await api('/database/row/delete', { method: 'POST', body: JSON.stringify({ table: state.selectedTable, primaryKey,expectedVersion:state.rowVersions.get(row) }) })
       await loadTables()
       toast('数据库记录已物理删除')
     } catch (error) {
@@ -622,7 +630,7 @@
       }
       const remove = cell('button', '删除', 'link-button danger')
       remove.type = 'button'
-      remove.addEventListener('click', () => deleteRedis(item.key))
+      remove.addEventListener('click', () => deleteRedis(item))
       actions.append(remove)
       row.append(valueCell, actions)
       body.append(row)
@@ -639,6 +647,7 @@
   }
 
   function openRedisDialog(item) {
+    state.redisVersion = item?.version ?? '__create__'
     const editing = Boolean(item)
     $('#redis-key').value = item?.key || ''
     $('#redis-key').disabled = editing
@@ -655,7 +664,7 @@
     try {
       await api('/redis/key/save', {
         method: 'POST',
-        body: JSON.stringify({ key, value: $('#redis-value').value, ttl: Number($('#redis-ttl').value) }),
+        body: JSON.stringify({ key, value: $('#redis-value').value, ttl: Number($('#redis-ttl').value), expectedVersion:state.redisVersion }),
       })
       $('#redis-dialog').close()
       await loadRedis()
@@ -667,10 +676,11 @@
     }
   }
 
-  async function deleteRedis(key) {
+  async function deleteRedis(item) {
+    const key=item.key
     if (!window.confirm(`确认删除 Redis 键？\n${key}`)) return
     try {
-      await api('/redis/key/delete', { method: 'POST', body: JSON.stringify({ key }) })
+      await api('/redis/key/delete', { method: 'POST', body: JSON.stringify({ key,expectedVersion:item.version }) })
       await loadRedis()
       toast('Redis 键已删除')
     } catch (error) {

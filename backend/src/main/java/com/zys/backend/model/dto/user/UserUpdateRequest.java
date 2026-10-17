@@ -8,6 +8,7 @@ import lombok.Data;
  */
 @Data
 public class UserUpdateRequest {
+    private Long expectedMutationVersion;
     /**
      * 用户ID
      */

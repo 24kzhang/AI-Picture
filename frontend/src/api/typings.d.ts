@@ -675,6 +675,7 @@ declare namespace API {
   }
 
   type User = {
+    mutationVersion?: number;
     createTime?: string
     editTime?: string
     id?: string
@@ -720,6 +721,7 @@ declare namespace API {
   }
 
   type UserUpdateRequest = {
+    expectedMutationVersion?: number;
     id?: string
     userAccount?: string
     userAvatar?: string
@@ -729,6 +731,7 @@ declare namespace API {
   }
 
   type UserVO = {
+    mutationVersion?: number;
     createTime?: string
     id?: string
     userAccount?: string

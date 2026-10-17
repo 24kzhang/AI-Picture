@@ -73,6 +73,7 @@ public class SystemSettingsService {
     private Environment environment;
 
     private final Object lock = new Object();
+    private String revision = java.util.UUID.randomUUID().toString();
 
     private Properties overrides = new Properties();
 
@@ -107,7 +108,9 @@ public class SystemSettingsService {
     }
 
     public Map<String, Object> getPublicSettings() {
+        synchronized(lock) {
         Map<String, Object> result = new LinkedHashMap<>();
+        result.put("revision",revision);
         result.put("settingsFile", getPath().toString());
         result.put("databaseUrl", getValue("database.url"));
         result.put("databaseUsername", getValue("database.username"));
@@ -125,6 +128,7 @@ public class SystemSettingsService {
         result.put("cosSecretKeyConfigured", StrUtil.isNotBlank(getValue("cos.secretKey")));
         result.put("aliyunApiKeyConfigured", StrUtil.isNotBlank(getValue("aliyun.apiKey")));
         return result;
+        }
     }
 
     /**
@@ -135,10 +139,12 @@ public class SystemSettingsService {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "没有可保存的配置");
         }
         synchronized (lock) {
+            if(!revision.equals(values.get("expectedRevision")))throw new BusinessException(ErrorCode.OPERATION_ERROR,"配置已被其他窗口更新，请刷新并核对后保存");
             Properties next = new Properties();
             next.putAll(overrides);
             for (Map.Entry<String, String> entry : values.entrySet()) {
                 String key = entry.getKey();
+                if("expectedRevision".equals(key))continue;
                 if (!PROPERTY_NAMES.containsKey(key)) {
                     throw new BusinessException(ErrorCode.PARAMS_ERROR, "不支持的配置项：" + key);
                 }
@@ -156,6 +162,7 @@ public class SystemSettingsService {
             }
             write(next);
             overrides = next;
+            revision = java.util.UUID.randomUUID().toString();
         }
         Map<String, Object> result = getPublicSettings();
         result.put("restartRequired", true);

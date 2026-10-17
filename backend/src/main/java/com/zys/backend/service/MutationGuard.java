@@ -12,7 +12,7 @@ import javax.annotation.Resource;
 public class MutationGuard implements org.springframework.boot.ApplicationRunner {
     @Resource private JdbcTemplate jdbc;
     @Override public void run(org.springframework.boot.ApplicationArguments args) {
-        for (String table : new String[]{"space", "space_user"}) {
+        for (String table : new String[]{"user", "space", "space_user"}) {
             Integer count=jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME='mutationVersion'",Integer.class,table);
             if(count==null||count==0) jdbc.execute("ALTER TABLE " + table + " ADD COLUMN mutationVersion BIGINT NOT NULL DEFAULT 0");
         }

@@ -67,7 +67,7 @@ public class SystemAdminController {
         return ResultUtils.success(systemAdminService.updateRow(
                 requireTable(request),
                 mapValue(request, "primaryKey"),
-                mapValue(request, "values")
+                mapValue(request, "values"), stringValue(request.get("expectedVersion"))
         ));
     }
 
@@ -75,7 +75,7 @@ public class SystemAdminController {
     public BaseResponse<Integer> deleteRow(@RequestBody Map<String, Object> request) {
         return ResultUtils.success(systemAdminService.deleteRow(
                 requireTable(request),
-                mapValue(request, "primaryKey")
+                mapValue(request, "primaryKey"), stringValue(request.get("expectedVersion"))
         ));
     }
 
@@ -94,13 +94,13 @@ public class SystemAdminController {
         Long ttl = request.get("ttl") == null
                 ? null
                 : Long.valueOf(String.valueOf(request.get("ttl")));
-        return ResultUtils.success(systemAdminService.saveRedisString(key, value, ttl));
+        return ResultUtils.success(systemAdminService.saveRedisString(key, value, ttl, stringValue(request.get("expectedVersion"))));
     }
 
     @PostMapping("/redis/key/delete")
     public BaseResponse<Boolean> deleteRedisKey(@RequestBody Map<String, Object> request) {
         return ResultUtils.success(
-                systemAdminService.deleteRedisKey(stringValue(request.get("key"))));
+                systemAdminService.deleteRedisKey(stringValue(request.get("key")),stringValue(request.get("expectedVersion"))));
     }
 
     @GetMapping("/pictures/duplicates/preview")

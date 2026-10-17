@@ -131,6 +131,7 @@ public class SystemAdminService {
         result.put("columns", table.columns);
         result.put("primaryKeys", table.primaryKeys);
         result.put("rows", rows);
+        result.put("rowVersions", rows.stream().map(this::rowDigest).collect(Collectors.toList()));
         result.put("page", safePage);
         result.put("pageSize", safeSize);
         result.put("total", countRows(table));
@@ -152,17 +153,23 @@ public class SystemAdminService {
         return jdbcTemplate.update(sql, safeValues.values().toArray());
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public int updateRow(String tableName,
                          Map<String, Object> primaryKey,
-                         Map<String, Object> values) {
+                         Map<String, Object> values, String expectedVersion) {
         TableMeta table = requireTable(tableName);
         requirePrimaryKey(table, primaryKey);
+        Map<String,Object> current = lockRow(table,primaryKey,expectedVersion);
         Map<String, Object> safeValues = filterValues(table, values, false);
         for (String key : table.primaryKeys) {
             safeValues.remove(key);
         }
         if (safeValues.isEmpty()) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "没有可修改的字段");
+        }
+        for(String version : new String[]{"mutationVersion","editVersion","review_version"}) {
+            if(table.columnNames.contains(version)&&current.get(version) instanceof Number)
+                safeValues.put(version,((Number)current.get(version)).longValue()+1);
         }
         List<Object> parameters = new ArrayList<>(safeValues.values());
         parameters.addAll(table.primaryKeys.stream().map(primaryKey::get)
@@ -175,14 +182,30 @@ public class SystemAdminService {
         return jdbcTemplate.update(sql, parameters.toArray());
     }
 
-    public int deleteRow(String tableName, Map<String, Object> primaryKey) {
+    @org.springframework.transaction.annotation.Transactional
+    public int deleteRow(String tableName, Map<String, Object> primaryKey, String expectedVersion) {
         TableMeta table = requireTable(tableName);
         requirePrimaryKey(table, primaryKey);
+        lockRow(table,primaryKey,expectedVersion);
         String sql = "DELETE FROM " + quote(table.name) + " WHERE " +
                 table.primaryKeys.stream().map(key -> quote(key) + " = ?")
                         .collect(Collectors.joining(" AND "));
         Object[] parameters = table.primaryKeys.stream().map(primaryKey::get).toArray();
         return jdbcTemplate.update(sql, parameters);
+    }
+
+    private String rowDigest(Map<String,Object> row) {
+        Map<String,Object> canonical=new java.util.TreeMap<>(row);
+        canonical.replaceAll((key,value)->value instanceof java.util.Date?value.toString():value);
+        return cn.hutool.crypto.digest.DigestUtil.sha256Hex(cn.hutool.json.JSONUtil.toJsonStr(canonical));
+    }
+
+    private Map<String,Object> lockRow(TableMeta table,Map<String,Object> primaryKey,String expected) {
+        String predicate=table.primaryKeys.stream().map(key->quote(key)+" = ?").collect(Collectors.joining(" AND "));
+        List<Map<String,Object>> found=jdbcTemplate.queryForList("SELECT * FROM "+quote(table.name)+" WHERE "+predicate+" FOR UPDATE",table.primaryKeys.stream().map(primaryKey::get).toArray());
+        if(found.isEmpty()||!rowDigest(jsonSafeRow(found.get(0))).equals(expected))
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,"数据库记录已变化或删除，请重新读取后核对；当前表单已保留");
+        return found.get(0);
     }
 
     public Map<String, Object> listRedisKeys(String pattern, int limit) {
@@ -194,6 +217,7 @@ public class SystemAdminService {
                 ScanOptions.scanOptions().match(safePattern).count(Math.min(safeLimit, 200)).build())) {
             while (cursor.hasNext() && items.size() < safeLimit) {
                 String key = new String(cursor.next(), StandardCharsets.UTF_8);
+                if(key.startsWith("__gallery_admin_version:"))continue;
                 items.add(readRedisKey(key));
             }
         } catch (Exception e) {
@@ -209,28 +233,32 @@ public class SystemAdminService {
         return result;
     }
 
-    public Map<String, Object> saveRedisString(String key, String value, Long ttlSeconds) {
+    public Map<String, Object> saveRedisString(String key, String value, Long ttlSeconds, String expectedVersion) {
         if (StrUtil.isBlank(key)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "Redis 键不能为空");
         }
         if (key.indexOf('\n') >= 0 || key.indexOf('\r') >= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "Redis 键不能包含换行");
         }
-        redisTemplate.opsForValue().set(key, value == null ? "" : value);
-        if (ttlSeconds != null && ttlSeconds > 0) {
-            redisTemplate.expire(key, java.time.Duration.ofSeconds(ttlSeconds));
-        } else if (ttlSeconds != null && ttlSeconds == -1) {
-            redisTemplate.persist(key);
-        }
+        requireRedisChange(redisTemplate.execute(new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+                redisCompare()+"if ARGV[1]=='__create__' then if d then return 0 end elseif v~=ARGV[1] then return 0 end; redis.call('SET',KEYS[1],ARGV[2]); local ttl=tonumber(ARGV[3]); if ttl and ttl>0 then redis.call('EXPIRE',KEYS[1],ttl) end; redis.call('INCR',KEYS[2]); return 1",Long.class),
+                redisKeys(key),expectedVersion==null?"":expectedVersion,value==null?"":value,String.valueOf(ttlSeconds==null?-1:ttlSeconds)));
         return readRedisKey(key);
     }
 
-    public boolean deleteRedisKey(String key) {
+    public boolean deleteRedisKey(String key, String expectedVersion) {
         if (StrUtil.isBlank(key)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "Redis 键不能为空");
         }
-        return Boolean.TRUE.equals(redisTemplate.delete(key));
+        requireRedisChange(redisTemplate.execute(new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+                redisCompare()+"if not d or v~=ARGV[1] then return 0 end;redis.call('DEL',KEYS[1]);redis.call('INCR',KEYS[2]);return 1",Long.class),redisKeys(key),expectedVersion==null?"":expectedVersion));
+        return true;
     }
+
+    private List<String> redisKeys(String key) { return java.util.Arrays.asList(key,"__gallery_admin_version:"+cn.hutool.crypto.digest.DigestUtil.sha256Hex(key)); }
+    private String redisCompare() { return "local d=redis.call('DUMP',KEYS[1]);local v=(d and redis.sha1hex(d) or 'missing')..':'..(redis.call('GET',KEYS[2]) or '0');"; }
+    private String redisVersion(String key) { return redisTemplate.execute(new org.springframework.data.redis.core.script.DefaultRedisScript<>(redisCompare()+"return v",String.class),redisKeys(key)); }
+    private void requireRedisChange(Long changed) { if(!Long.valueOf(1).equals(changed))throw new BusinessException(ErrorCode.OPERATION_ERROR,"Redis 键已变化、过期或被删除，请刷新后核对；本地输入已保留"); }
 
     private Map<String, Object> databaseStatus() {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -267,6 +295,7 @@ public class SystemAdminService {
     }
 
     private Map<String, Object> readRedisKey(String key) {
+        String before=redisVersion(key);
         Map<String, Object> item = new LinkedHashMap<>();
         item.put("key", key);
         DataType type = redisTemplate.type(key);
@@ -291,6 +320,7 @@ public class SystemAdminService {
         } catch (DataAccessException e) {
             item.put("value", "读取失败：" + e.getMostSpecificCause().getMessage());
         }
+        item.put("version",before.equals(redisVersion(key))?before:"");
         return item;
     }
 
