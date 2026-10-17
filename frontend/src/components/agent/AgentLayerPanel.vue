@@ -139,4 +139,6 @@ function onOpacity(layer: CanvasLayer, value: number) {
 .layer-move {
   display: flex;
 }
+
+.layer-panel,.layer-list{min-height:0}.layer-list{overscroll-behavior:contain}
 </style>

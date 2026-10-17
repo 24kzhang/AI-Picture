@@ -1,0 +1,15 @@
+:root {
+  --gallery-primary: #1677ff;
+  --gallery-primary-soft: #eaf3ff;
+  --gallery-bg: #f4f7fb;
+  --gallery-panel: #ffffff;
+  --gallery-text: #243247;
+  --gallery-muted: #718096;
+  --gallery-line: #e2e8f0;
+  font-family: 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  color: var(--gallery-text);
+}
+body { margin: 0; color: var(--gallery-text); background: var(--gallery-bg); }
+* { scrollbar-width: thin; scrollbar-color: #becbdc transparent; }
+button, input, select, textarea { accent-color: var(--gallery-primary); }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--gallery-primary); outline-offset: 3px; }

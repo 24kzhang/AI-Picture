@@ -1,11 +1,14 @@
 <template>
   <div id="app">
-    <BasicLayout />
+    <a-config-provider :locale="zhCN" :theme="{token:{colorPrimary:'#1677ff',colorText:'#243247',colorBorder:'#dbe4ef',borderRadius:8}}">
+      <BasicLayout />
+    </a-config-provider>
   </div>
 </template>
 
 <script setup lang="ts">
 import BasicLayout from '@/layouts/BasicLayout.vue'
+import zhCN from 'ant-design-vue/es/locale/zh_CN'
 // import { healthUsingGet } from '@/api/mainController.ts'
 // import { useLoginUserStore } from '@/stores/useLoginUserStore.ts'
 //

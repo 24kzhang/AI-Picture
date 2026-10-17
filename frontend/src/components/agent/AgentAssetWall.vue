@@ -169,4 +169,9 @@ function kindText(kind: string) {
   font-size: 12px;
   padding: 0 4px;
 }
+
+
+.asset-wall{height:100%;display:flex;flex-direction:column;min-height:0}.wall-head{flex:0 0 auto;padding:7px 10px;gap:6px}
+.wall-list{flex:1;min-height:0;overflow:auto;padding:7px 10px;overscroll-behavior:contain}.asset-item{width:120px}.asset-item img{height:70px;width:116px}
+
 </style>

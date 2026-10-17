@@ -65,7 +65,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, nextTick } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue'
 
 export interface CanvasLayer {
   id?: string
@@ -149,7 +149,10 @@ function measure() {
   displayHeight.value = Math.max(1, Math.round(docHeight.value * ratio))
 }
 
+let viewportObserver:ResizeObserver|undefined
 onMounted(() => {
+  viewportObserver=new ResizeObserver(measure)
+  if(viewportRef.value)viewportObserver.observe(viewportRef.value)
   measure()
   window.addEventListener('resize', measure)
 })
@@ -335,6 +338,8 @@ watch(selectionMode, (mode) => {
   }
 })
 
+onUnmounted(()=>{onMouseUp();viewportObserver?.disconnect();window.removeEventListener('resize',measure)})
+
 // endregion
 </script>
 
@@ -395,4 +400,9 @@ watch(selectionMode, (mode) => {
   top: 0;
   pointer-events: none;
 }
+
+
+.agent-canvas{min-height:0}.canvas-toolbar{flex:0 0 auto;flex-wrap:wrap;gap:6px;padding:8px;background:var(--gallery-panel)}
+.canvas-viewport{min-height:0;background:var(--gallery-bg);overscroll-behavior:contain}.canvas-stage{flex-shrink:0}
+
 </style>

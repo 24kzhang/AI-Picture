@@ -174,4 +174,9 @@ watch(
   gap: 8px;
   align-items: flex-end;
 }
+
+
+.chat-panel,.chat-list{min-height:0}.chat-list{overscroll-behavior:contain}.chat-input{flex:0 0 auto;background:var(--gallery-panel)}
+.chat-input :deep(textarea){max-height:110px!important;overflow:auto!important}.bubble{overflow-wrap:anywhere}
+
 </style>

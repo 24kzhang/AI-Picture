@@ -42,9 +42,10 @@
             />
             <div class="tool-panel">
               <div class="panel-title">工具</div>
+              <a-input v-model:value="toolSearch" class="tool-search" size="small" placeholder="搜索工具" aria-label="搜索图片工具" allow-clear />
               <div class="tool-grid">
                 <a-button
-                  v-for="tool in session.tools"
+                  v-for="tool in filteredTools"
                   :key="tool.name"
                   size="small"
                   :disabled="!editable || running || unavailableTools.has(tool.name)"
@@ -95,7 +96,11 @@
         <!-- 工具参数弹窗 -->
         <a-modal
           v-model:open="toolModalOpen"
-          :title="activeTool ? `${activeTool.label}（${activeTool.name}）` : ''"
+          ok-text="应用"
+          cancel-text="取消"
+          style="top:24px"
+          :body-style="{maxHeight:'calc(100dvh - 210px)',overflowY:'auto'}"
+          :title="activeTool?.label || ''"
           :confirm-loading="sending"
           @ok="submitActiveTool"
         >
@@ -104,7 +109,7 @@
             <a-form-item
               v-for="field in visibleParams"
               :key="field.name"
-              :label="field.name"
+              :label="fieldLabels[field.name] || field.name"
               :required="field.required"
             >
               <template v-if="field.choices">
@@ -241,6 +246,9 @@ const router = useRouter()
 
 const initializing = ref(true)
 const session = ref<AgentSessionVO | null>(null)
+const toolSearch=ref('')
+const filteredTools=computed(()=>(session.value?.tools||[]).filter(tool=>!toolSearch.value.trim()||(tool.label+' '+tool.name).toLowerCase().includes(toolSearch.value.trim().toLowerCase())))
+const fieldLabels:Record<string,string>={name:"图层名称",prompt:'画面描述',text:'文字内容',width:'宽度',height:'高度',x:'水平位置',y:'垂直位置',scale:'缩放比例',scaleX:'水平缩放',scaleY:'垂直缩放',rotation:'旋转角度',angle:'旋转角度',opacity:'不透明度',layerId:'目标图层',visible:'显示图层',fontSize:'字号',fill:'文字颜色',color:'颜色',strength:'调整强度',seed:'随机种子',steps:'生成步数',guidance_scale:'提示词强度',ratio:'画幅比例',ratioKey:'画幅比例',order:'图层顺序',sizes:'投放尺寸',kind:'营销图类型',scene:'场景描述',operations:'批量操作',assetIds:'图片素材',factor:'放大倍数',flipX:'水平翻转',flipY:'垂直翻转',left:'左侧位置',top:'顶部位置',brightness:'亮度',contrast:'对比度',saturation:'饱和度',targetWidth:'目标宽度',targetHeight:'目标高度'}
 const sending = ref(false)
 const actingRunId = ref<string>('')
 const versionOpen = ref(false)
@@ -816,4 +824,24 @@ onBeforeUnmount(() => {
   color: #999;
   font-size: 12px;
 }
+
+
+#agentWorkbenchPage {height:100%;min-height:0;color:var(--gallery-text)}
+#agentWorkbenchPage.embedded {height:calc(100dvh - 230px);min-height:0}
+.workbench-header {flex:0 0 auto;gap:10px;flex-wrap:wrap;border:1px solid var(--gallery-line);border-radius:10px;background:var(--gallery-panel)}
+.workbench-header :deep(.ant-space){flex-wrap:wrap;gap:6px!important}
+.session-title {font-size:13px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.workbench-body{display:grid;grid-template-columns:minmax(170px,210px) minmax(0,1fr) minmax(270px,320px);gap:10px;overflow:hidden;padding-top:10px}
+.side-panel,.chat-panel-wrap{width:auto;min-width:0;min-height:0;border:1px solid var(--gallery-line);border-radius:10px}
+.side-panel>:first-child{flex:1;min-height:90px;overflow:hidden}
+.tool-panel{flex:0 1 46%;min-height:70px;display:flex;flex-direction:column;overflow:hidden}
+.tool-grid{max-height:none;min-height:0;overflow:auto;flex:1;padding:0 10px 10px}
+.tool-grid :deep(.ant-btn){min-height:30px;text-align:left;font-size:12px;border-color:var(--gallery-line)}
+.tool-search{margin:0 10px 8px;width:calc(100% - 20px);flex:0 0 auto}
+.center-panel{border:1px solid var(--gallery-line);border-radius:10px;min-height:0;gap:0}
+.wall-panel{flex:0 0 clamp(155px,24vh,210px);height:auto;min-height:0;overflow:hidden}
+.chat-panel-wrap{height:100%}
+@media(max-width:1100px){.workbench-body{grid-template-columns:170px minmax(0,1fr) 270px}.session-title{display:none}}
+@media(max-width:760px){.workbench-body{grid-template-columns:145px minmax(0,1fr);grid-template-rows:minmax(0,1fr) 180px}.chat-panel-wrap{grid-column:1/-1}.wall-panel{flex-basis:150px}.tool-grid{grid-template-columns:1fr}}
+
 </style>
