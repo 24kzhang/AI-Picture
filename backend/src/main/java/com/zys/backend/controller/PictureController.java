@@ -370,7 +370,7 @@ public class PictureController {
     }
 
     /**
-     * 使用百炼视觉 Embedding 和 Chroma 以图搜图。
+     * 使用服务器视觉 Embedding 和 Chroma 以图搜图。
      */
     @PostMapping("/search/picture")
     public BaseResponse<List<ImageSearchResult>> searchPictureByPicture(

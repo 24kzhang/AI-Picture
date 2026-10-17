@@ -27,7 +27,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
- * 基于百炼视觉 Embedding 和 Chroma 的权限隔离以图搜图。
+ * 基于服务器视觉 Embedding 和 Chroma 的权限隔离以图搜图。
  */
 @Service
 public class LocalImageSearchService {

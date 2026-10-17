@@ -7,10 +7,7 @@ from pathlib import Path
 
 
 SERVICE_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_API_URL = (
-    "https://dashscope.aliyuncs.com/api/v1/services/embeddings/"
-    "multimodal-embedding/multimodal-embedding"
-)
+DEFAULT_BASE_URL = "http://172.18.20.44:30066/embedding"
 
 
 def default_chroma_path() -> Path:
@@ -24,58 +21,32 @@ def default_chroma_path() -> Path:
     return (SERVICE_ROOT / "data" / "chroma").resolve()
 
 
-def load_api_key(config_path: Path | None = None) -> str:
-    """优先读取环境变量，否则复用后端 application-local.yml 中的密钥。"""
-    environment_key = os.getenv("DASHSCOPE_API_KEY", "").strip()
-    if environment_key:
-        return environment_key
-    path = config_path or (
-        SERVICE_ROOT.parent
-        / "backend"
-        / "src"
-        / "main"
-        / "resources"
-        / "application-local.yml"
-    )
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return ""
-    for line in lines:
-        stripped = line.strip()
-        if not stripped.startswith("apiKey:"):
-            continue
-        value = stripped.partition(":")[2].strip()
-        return value.strip('"').strip("'")
-    return ""
-
-
 @dataclass(frozen=True)
 class Settings:
-    """百炼 Embedding 与 Chroma 的运行配置。"""
+    """服务器多模态 Embedding 与独立 Chroma 索引配置。"""
 
     api_key: str = field(
-        default_factory=load_api_key
+        default_factory=lambda: os.getenv("EMBEDDING_API_KEY", "").strip()
     )
-    api_url: str = field(
+    base_url: str = field(
         default_factory=lambda: os.getenv(
-            "DASHSCOPE_EMBEDDING_URL", DEFAULT_API_URL
-        ).strip()
+            "EMBEDDING_BASE_URL", DEFAULT_BASE_URL
+        ).strip().rstrip("/")
     )
     model_name: str = field(
         default_factory=lambda: os.getenv(
             "EMBEDDING_MODEL",
-            "tongyi-embedding-vision-flash-2026-03-06",
+            "qwen3-vl-embedding-2b-finetuned",
         ).strip()
     )
     dimension: int = field(
-        default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSION", "512"))
+        default_factory=lambda: int(os.getenv("EMBEDDING_DIMENSION", "2048"))
     )
-    res_level: int = field(
-        default_factory=lambda: int(os.getenv("EMBEDDING_RES_LEVEL", "1"))
+    model_revision: str = field(
+        default_factory=lambda: os.getenv("EMBEDDING_REVISION", "checkpoint-60").strip()
     )
     api_timeout_seconds: float = field(
-        default_factory=lambda: float(os.getenv("DASHSCOPE_TIMEOUT_SECONDS", "60"))
+        default_factory=lambda: float(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "600"))
     )
     chroma_path: Path = field(default_factory=default_chroma_path)
     request_limit_mb: int = field(
@@ -84,7 +55,7 @@ class Settings:
 
     @property
     def collection_name(self) -> str:
-        signature = f"{self.model_name}:{self.dimension}:{self.res_level}"
+        signature = f"server-image-v1:{self.model_name}:{self.dimension}:{self.model_revision}"
         model_hash = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
         return f"gallery_{model_hash}"
 

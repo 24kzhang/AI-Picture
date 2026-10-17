@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from .chroma_store import ChromaStore
 from .config import settings
-from .dashscope_client import DashScopeEmbeddingClient, DashScopeEmbeddingError
+from .embedding_client import ServerEmbeddingClient, EmbeddingError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,15 +19,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-embedding_client: DashScopeEmbeddingClient | None = None
+embedding_client: ServerEmbeddingClient | None = None
 chroma_store: ChromaStore | None = None
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global embedding_client, chroma_store
-    logger.info("正在初始化百炼 Embedding 与 Chroma 服务")
-    embedding_client = DashScopeEmbeddingClient()
+    logger.info("正在初始化服务器 Embedding 与 Chroma 服务")
+    embedding_client = ServerEmbeddingClient()
     chroma_store = ChromaStore(settings.chroma_path, settings.collection_name)
     logger.info(
         "向量服务初始化完成，model=%s，collection=%s",
@@ -44,8 +44,8 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="AI 协同云图库百炼向量服务",
-    version="2.0.0",
+    title="AI 协同云图库服务器向量服务",
+    version="3.0.0",
     lifespan=lifespan,
 )
 
@@ -83,17 +83,18 @@ def health() -> dict[str, object]:
     if embedding_client is None or chroma_store is None:
         raise HTTPException(status_code=503, detail="服务仍在初始化")
     if not embedding_client.configured:
-        raise HTTPException(status_code=503, detail="未配置 DASHSCOPE_API_KEY")
+        raise HTTPException(status_code=503, detail="未配置 Embedding 服务地址")
     try:
+        embedding_client.health()
         chroma_ok = chroma_store.ping()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Chroma 不可用：{exc}") from exc
+        raise HTTPException(status_code=503, detail=f"图片向量服务不可用：{exc}") from exc
     return {
         "status": "ok",
-        "provider": "阿里云百炼",
+        "provider": "服务器 Embedding",
         "model": settings.model_name,
         "dimension": settings.dimension,
-        "resLevel": settings.res_level,
+        "revision": settings.model_revision,
         "chroma": chroma_ok,
         "vectorCount": chroma_store.count,
         "collection": settings.collection_name,
@@ -111,7 +112,7 @@ async def upsert_vector(
         vector = await run_in_threadpool(_embedder().encode, path)
         _store().upsert(picture_id, space_id, vector)
         return {"pictureId": picture_id, "dimension": len(vector), "indexed": True}
-    except DashScopeEmbeddingError as exc:
+    except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         path.unlink(missing_ok=True)
@@ -129,7 +130,7 @@ async def search_vectors(
         vector = await run_in_threadpool(_embedder().encode, path)
         items = _store().search(vector, spaces, max(1, min(120, limit)))
         return {"items": items}
-    except DashScopeEmbeddingError as exc:
+    except EmbeddingError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         path.unlink(missing_ok=True)
@@ -192,9 +193,9 @@ def _parse_space_ids(value: str) -> list[int]:
     return spaces
 
 
-def _embedder() -> DashScopeEmbeddingClient:
+def _embedder() -> ServerEmbeddingClient:
     if embedding_client is None:
-        raise HTTPException(status_code=503, detail="百炼客户端尚未就绪")
+        raise HTTPException(status_code=503, detail="服务器 Embedding 客户端尚未就绪")
     return embedding_client
 
 

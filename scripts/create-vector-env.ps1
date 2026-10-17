@@ -16,4 +16,4 @@ conda run -n $envName python -m pip install -r $requirements `
     -i https://pypi.tuna.tsinghua.edu.cn/simple `
     --extra-index-url https://pypi.org/simple
 
-Write-Host "向量环境 $envName 已准备完成（百炼 API + Chroma，无需 Docker）。" -ForegroundColor Green
+Write-Host "向量环境 $envName 已准备完成（服务器 Embedding + Chroma，无需 Docker）。" -ForegroundColor Green

@@ -15,7 +15,7 @@
       <div class="page-heading">
         <div>
           <h2>智能向量以图搜图</h2>
-          <p>由阿里云百炼视觉 Embedding 与本地 Chroma 提供语义相似度检索</p>
+          <p>使用服务器视觉向量模型，查找当前图库中的相似图片</p>
         </div>
         <a-tag :color="vectorAvailable ? 'green' : 'red'">
           {{ vectorAvailable ? '向量服务正常' : '向量服务不可用' }}
@@ -26,7 +26,7 @@
         v-if="!vectorAvailable"
         type="warning"
         show-icon
-        message="请检查百炼 API Key 并启动 vector-service，再执行检索。"
+        message="图片检索服务暂不可用，请稍后重试或联系管理员。"
         style="margin-bottom: 16px"
       />
 

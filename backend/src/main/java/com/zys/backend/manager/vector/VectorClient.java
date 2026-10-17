@@ -32,7 +32,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Java 后端与百炼 Embedding/Chroma 服务之间的客户端。
+ * Java 后端与服务器 Embedding/Chroma 服务之间的客户端。
  */
 @Slf4j
 @Component
@@ -165,7 +165,7 @@ public class VectorClient {
             log.error("调用本地向量服务失败：{}", path, e);
             throw new BusinessException(
                     ErrorCode.SYSTEM_ERROR,
-                    "图片向量服务不可用，请检查百炼密钥和 vector-service"
+                    "图片检索服务暂不可用，请稍后重试或联系管理员"
             );
         }
     }
