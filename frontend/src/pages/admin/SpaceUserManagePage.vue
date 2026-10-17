@@ -35,6 +35,7 @@
         <template v-if="column.dataIndex === 'spaceRole'">
           <a-select
             v-model:value="record.spaceRole"
+            :disabled="pendingMembers.has(String(record.id))"
             :options="SPACE_ROLE_OPTIONS"
             @change="(value) => editSpaceRole(value, record)"
           />
@@ -136,29 +137,39 @@ const handleSubmit = async () => {
 
 // 编辑成员角色
 const editSpaceRole = async (value, record) => {
+  if (pendingMembers.value.has(String(record.id))) return
+  pendingMembers.value.add(String(record.id))
+  try {
   const res = await editSpaceUserUsingPost({
     id: record.id,
     spaceRole: value,
+    expectedMutationVersion: record.mutationVersion ?? 0,
   })
   if (res.data.code === 0) {
     message.success('修改成功')
   } else {
     message.error('修改失败，' + res.data.message)
   }
+  } finally { pendingMembers.value.delete(String(record.id)); await fetchData() }
 }
+const pendingMembers = ref(new Set<string>())
 
 // 删除数据
 const doDelete = async (id: string) => {
+  if (pendingMembers.value.has(String(id))) return
   if (!id) {
     return
   }
-  const res = await deleteSpaceUserUsingPost({ id })
+  pendingMembers.value.add(String(id))
+  try {
+  const res = await deleteSpaceUserUsingPost({ id, expectedMutationVersion: dataList.value.find(row=>String(row.id)===String(id))?.mutationVersion ?? 0 })
   if (res.data.code === 0) {
     message.success('删除成功')
     // 刷新数据
     fetchData()
   } else {
-    message.error('删除失败')
+    message.error('删除失败，' + res.data.message)
   }
+  } finally { pendingMembers.value.delete(String(id)); await fetchData() }
 }
 </script>

@@ -88,14 +88,17 @@ const router = useRouter()
  * @param values
  */
 const handleSubmit = async (values: any) => {
+  if (loading.value) return
   const spaceId = space.value?.id
   loading.value = true
+  try {
   let res
   if (spaceId) {
     // 更新
     res = await updateSpaceUsingPost({
       id: spaceId,
       ...spaceForm,
+      expectedMutationVersion: space.value?.mutationVersion ?? 0,
     })
   } else {
     // 创建
@@ -114,7 +117,7 @@ const handleSubmit = async (values: any) => {
   } else {
     message.error('操作失败，' + res.data.message)
   }
-  loading.value = false
+  } finally { loading.value = false }
 }
 
 // 获取老数据

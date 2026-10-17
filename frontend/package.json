@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "build-only": "vite build --configLoader runner",
     "type-check": "vue-tsc --build",
+    "test:collaboration": "node --experimental-strip-types --test test/*.test.ts",
     "lint": "eslint . --fix",
     "format": "prettier --write src/"
   },

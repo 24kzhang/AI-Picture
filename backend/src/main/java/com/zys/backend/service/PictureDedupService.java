@@ -66,7 +66,7 @@ public class PictureDedupService {
         for (DedupGroup group : plan.groups) {
             for (Picture picture : group.removed) {
                 try {
-                    pictureService.deletePicture(picture.getId(), localOperator);
+                    pictureService.deletePicture(picture.getId(), localOperator, picture.getEditVersion());
                     deletedCount++;
                 } catch (RuntimeException e) {
                     failedIds.add(picture.getId());

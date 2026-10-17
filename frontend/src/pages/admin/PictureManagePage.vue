@@ -243,7 +243,7 @@ const doDelete = async (id: string) => {
   if (!id) {
     return
   }
-  const res = await deletePictureUsingPost({ id })
+  const res = await deletePictureUsingPost({ id, expectedEditVersion: dataList.value.find(row => String(row.id) === String(id))?.editVersion ?? 0 })
   if (res.data.code === 0) {
     message.success('删除成功')
     await fetchData()
@@ -260,6 +260,7 @@ const handleReview = async (record: API.Picture, reviewStatus: number) => {
     id: record.id,
     reviewStatus,
     reviewMessage,
+    expectedEditVersion: record.editVersion ?? 0,
   })
   if (res.data.code === 0) {
     message.success('审核操作成功')

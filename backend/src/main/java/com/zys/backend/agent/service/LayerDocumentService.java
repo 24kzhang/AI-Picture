@@ -202,6 +202,7 @@ public class LayerDocumentService {
         if (adopted != null && documentAfter == null) {
             documentAfter = adoptIntoDocument(currentDocument, adopted);
         }
+        documentAfter.remove("quickEditorState");
         applyEdit(session, run.getTool(), run.getParamsJson(), documentAfter, adopted, run.getId());
         return true;
     }
@@ -267,6 +268,7 @@ public class LayerDocumentService {
      */
     public JSONObject adoptIntoDocument(JSONObject document, PictureAgentAsset asset) {
         JSONObject next = document == null ? new JSONObject() : JSONUtil.parseObj(document.toString());
+        next.remove("quickEditorState");
         int width = asset.getWidth() == null ? next.getInt("width", 0) : asset.getWidth();
         int height = asset.getHeight() == null ? next.getInt("height", 0) : asset.getHeight();
         next.set("width", width);

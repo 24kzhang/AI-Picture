@@ -1,5 +1,5 @@
 <template>
-  <a-modal v-model:open="visible" :width="1160" :footer="null" title="协同图片工作台" style="top: 12px" @cancel="closeModal">
+  <a-modal :open="visible" :width="1320" :footer="null" title="协同图片工作台" style="top: 12px" @cancel="closeModal">
     <div class="status-bar">
       <div class="status-main">
         <div class="editing-status"><i :class="{ live: isTeamSpace }"></i><b>{{ isTeamSpace ? '多人协同' : '个人编辑' }}</b><span>{{ statusText }}</span></div>
@@ -23,15 +23,31 @@
       <a-space v-if="isTeamSpace">
         <a-button v-if="canEnterEdit" type="primary" ghost @click="enterEdit">获取编辑权</a-button>
         <a-button v-if="canExitEdit" danger ghost @click="exitEdit">释放编辑权</a-button>
+        <a-select v-if="canExitEdit" v-model:value="handoffTarget" placeholder="选择交接成员" style="width: 150px" :options="handoffMembers" />
+        <a-button v-if="canExitEdit" :disabled="!handoffTarget || draftSaving" @click="handoffEdit">交接编辑权</a-button>
       </a-space>
     </div>
 
-    <div class="editor-shell">
+    <a-space v-if="isTeamSpace" style="margin-bottom: 12px">
+      <a-button :disabled="annotationsRef?.isBusy()" :type="editorMode === 'manual' ? 'primary' : 'default'" @click="switchMode('manual')">手动画布</a-button>
+      <a-button :disabled="annotationsRef?.isBusy()" :type="editorMode === 'agent' ? 'primary' : 'default'" @click="switchMode('agent')">图片编辑 Agent</a-button>
+      <a-button :disabled="annotationsRef?.isBusy()" :type="editorMode === 'annotations' ? 'primary' : 'default'" @click="switchMode('annotations')">多人画笔 / 贴图</a-button>
+      <a-tag>{{ draftSaving ? '正在保存共享草稿…' : dirty ? '本地修改待保存' : sharedSession ? `共享草稿 · 版本 ${sharedSession.revision}` : '正在载入共享工程…' }}</a-tag>
+    </a-space>
+    <a-alert v-if="!isTeamSpace && personalVersion !== (picture?.editVersion ?? 0)" type="warning" show-icon message="图片已被其他窗口更新，本地画布已保留。保存前请核对最新图片。" style="margin-bottom:12px">
+      <template #action><a-button @click="reloadPersonal">放弃本地修改并载入最新</a-button></template>
+    </a-alert>
+    <a-alert v-if="localConflict" type="warning" show-icon message="共享画布已被其他成员更新，本窗口的未保存修改已保留。请选择如何处理。" style="margin-bottom: 12px">
+      <template #action><a-space><a-button :disabled="!canExitEdit" @click="applyLocalDraft">将本地草稿作为新版本</a-button><a-button @click="discardLocalDraft">放弃本地修改并同步</a-button></a-space></template>
+    </a-alert>
+    <AgentWorkbenchPage v-if="isTeamSpace && sharedSession && editorMode === 'agent'" :picture-id="String(picture?.id)" embedded :shared-session="sharedSession" :can-write="canEdit" @updated="receiveAgentSnapshot" @back="switchMode('manual')" @committed="onSharedCommitted" />
+    <PictureAnnotations v-if="visible && isTeamSpace && picture?.id && editorMode === 'annotations'" ref="annotationsRef" :picture-id="String(picture.id)" :editable="hasEditPermission" />
+    <div v-show="editorMode === 'manual'" class="editor-shell">
       <aside class="tool-rail">
         <label>历史</label>
         <div class="tool-grid">
-          <button :disabled="!canEdit || !history.length" @click="undo">↶<small>撤销</small></button>
-          <button :disabled="!canEdit || !future.length" @click="redo">↷<small>重做</small></button>
+          <button :disabled="!canEdit || (isTeamSpace ? !sharedSession?.canUndo : !history.length)" @click="undo">↶<small>撤销</small></button>
+          <button :disabled="!canEdit || (isTeamSpace ? !sharedSession?.canRedo : !future.length)" @click="redo">↷<small>重做</small></button>
         </div>
         <label>变换</label>
         <div class="tool-grid">
@@ -85,7 +101,7 @@
       </aside>
     </div>
 
-  <footer class="footer"><span><b>{{ state.strokes.length }}</b> 条笔迹 · <b>{{ state.overlays.length }}</b> 个图层</span><a-space><a-button @click="closeModal">取消</a-button><a-button type="primary" :loading="loading" :disabled="!canEdit || imageLoading || !sourceImage" @click="saveImage">保存并应用</a-button></a-space></footer>
+  <footer v-if="editorMode === 'manual'" class="footer"><span><b>{{ state.strokes.length }}</b> 条笔迹 · <b>{{ state.overlays.length }}</b> 个图层</span><a-space><a-button @click="closeModal">关闭</a-button><a-button type="primary" :loading="loading" :disabled="!canEdit || imageLoading || !sourceImage" @click="saveImage">保存并应用</a-button></a-space></footer>
     <ImageAiEditor ref="aiRef" :picture-id="picture?.id" :image-url="state.baseImageUrl" @apply="applyAiResult" />
   </a-modal>
 </template>
@@ -93,13 +109,18 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { uploadPictureUsingPost } from '@/api/pictureController.ts'
+import { uploadPictureUsingPost, getPictureVoByIdUsingGet } from '@/api/pictureController.ts'
 import { request } from '@/request.ts'
 import { useLoginUserStore } from '@/stores/useLoginUserStore.ts'
 import PictureEditWebSocket from '@/utils/pictureEditWebSocket.ts'
 import { PICTURE_EDIT_ACTION_ENUM, PICTURE_EDIT_MESSAGE_TYPE_ENUM } from '@/constants/picture.ts'
 import { SPACE_PERMISSION_ENUM, SPACE_TYPE_ENUM } from '@/constants/space.ts'
 import ImageAiEditor from '@/components/ImageAiEditor.vue'
+import PictureAnnotations from '@/components/PictureAnnotations.vue'
+import AgentWorkbenchPage from '@/pages/AgentWorkbenchPage.vue'
+import { clearPictureCollaborationContext, setPictureCollaborationContext, commitAgentSession, undoAgentSession, redoAgentSession, type AgentSessionVO } from '@/api/agentController'
+import { getPictureCollaboration, changePictureLease, prepareManualCanvas, savePictureCanvas } from '@/api/pictureCollaboration'
+import { acceptsPictureSnapshot } from '@/utils/pictureCollaboration'
 
 interface Props { imageUrl?: string; picture?: API.PictureVO; spaceId?: string; space?: API.SpaceVO; onSuccess?: (picture: API.PictureVO) => void }
 interface Point { x: number; y: number }
@@ -115,6 +136,22 @@ const props = defineProps<Props>()
 const defaults = (url = ''): EditorState => ({ baseImageUrl: url, scale: 1, rotation: 0, flipX: 1, flipY: 1, filters: { brightness: 0, contrast: 0, saturation: 0, grayscale: 0, sepia: 0 }, strokes: [], overlays: [] })
 const state = ref(defaults(props.imageUrl))
 const visible = ref(false)
+const personalVersion = ref(0)
+const sharedSession = ref<AgentSessionVO>()
+const clientId = crypto.randomUUID()
+const editorMode = ref<'manual' | 'agent' | 'annotations'>('manual')
+const annotationsRef = ref<InstanceType<typeof PictureAnnotations>>()
+const dirty = ref(false)
+const localConflict = ref(false)
+let localBase: { id: string; revision: number } | undefined
+const draftSaving = ref(false)
+const handoffTarget = ref<string>()
+const now = ref(Date.now())
+let pollTimer: number | undefined
+let renewTimer: number | undefined
+let saveTimer: number | undefined
+let flushPromise: Promise<void> | undefined
+let pendingSave: { state: EditorState; blob: Blob; key: string; context: ReturnType<typeof collaborationContext> } | undefined
 const loading = ref(false)
 const imageLoading = ref(false)
 const canvasRef = ref<HTMLCanvasElement>()
@@ -140,7 +177,7 @@ const isTeamSpace = computed(() => props.space?.spaceType === SPACE_TYPE_ENUM.TE
 const userStore = useLoginUserStore()
 const editingUser = ref<API.UserVO>()
 const hasEditPermission = computed(() => props.space?.permissionList?.includes(SPACE_PERMISSION_ENUM.PICTURE_EDIT) ?? false)
-const canEnterEdit = computed(() => !editingUser.value && hasEditPermission.value)
+const canEnterEdit = computed(() => hasEditPermission.value && !canExitEdit.value)
 const viewerUsers = ref<API.UserVO[]>([])
 const sameUser = (left?: number | string, right?: number | string) => left != null && right != null && String(left) === String(right)
 const isCurrentUser = (viewer: API.UserVO) => sameUser(viewer.id, userStore.loginUser.id)
@@ -148,9 +185,13 @@ const viewerName = (viewer: API.UserVO) => viewer.userName || viewer.userAccount
 const viewerInitial = (viewer: API.UserVO) => viewerName(viewer).trim().slice(0, 1) || '访'
 const updatePresence = (data?: PresenceMessage) => { if (Array.isArray(data?.viewers)) viewerUsers.value = data.viewers; editingUser.value = data?.editingUser || undefined }
 
-const canExitEdit = computed(() => sameUser(editingUser.value?.id, userStore.loginUser.id))
-const canEdit = computed(() => !isTeamSpace.value || canExitEdit.value)
-const statusText = computed(() => isTeamSpace.value ? (editingUser.value ? editingUser.value.userName + ' 正在编辑' : '当前无人占用编辑权') : '所有处理均在浏览器本地完成')
+const canExitEdit = computed(() => {
+  const lease = sharedSession.value?.collaboration
+  return !!lease && lease.clientId === clientId && sameUser(lease.editorId, userStore.loginUser.id) && lease.until > now.value
+})
+const canEdit = computed(() => !isTeamSpace.value || (canExitEdit.value && !localConflict.value && !draftSaving.value && !loading.value && hasEditPermission.value))
+const handoffMembers = computed(() => viewerUsers.value.filter((u) => !isCurrentUser(u)).map((u) => ({ value: String(u.id), label: viewerName(u) })))
+const statusText = computed(() => isTeamSpace.value ? (canExitEdit.value ? '本窗口正在编辑' : sharedSession.value?.collaboration?.editorId && sharedSession.value.collaboration.until > now.value ? `${sharedSession.value.collaboration.editorName || '成员'} 正在编辑／待接收` : '当前无人占用编辑权') : '所有处理均在浏览器本地完成')
 const canvasSize = computed(() => sourceSize.value.width ? sourceSize.value.width + ' × ' + sourceSize.value.height : '等待图片')
 const clone = () => JSON.parse(JSON.stringify(state.value)) as EditorState
 const snapshot = () => JSON.stringify(state.value)
@@ -181,8 +222,10 @@ const loadSource = async (url: string) => {
   let objectUrl: string | undefined
   try {
     if (props.picture?.id) {
-      const response = await request.get<Blob>('/api/picture/content', {
-        params: { pictureId: props.picture.id, url }, responseType: 'blob',
+      const asset = isTeamSpace.value ? sharedSession.value?.assets.find((item) => item.url === url) : undefined
+      const localUrl = asset ? `/api/picture/${props.picture.id}/collaboration/assets/${asset.id}/content` : url.startsWith('/api/picture/') ? url : undefined
+      const response = await request.get<Blob>(localUrl ?? '/api/picture/content', {
+        params: localUrl ? undefined : { pictureId: props.picture.id, url }, responseType: 'blob',
       })
       if (!response.data.type.startsWith('image/')) throw new Error('图片读取失败，请重新打开编辑器')
       objectUrl = URL.createObjectURL(response.data)
@@ -206,7 +249,13 @@ const loadSource = async (url: string) => {
 }
 const remember = () => { history.value.push(snapshot()); if (history.value.length > 30) history.value.shift(); future.value = [] }
 let websocket: PictureEditWebSocket | null = null
-const sync = (action: string) => { if (websocket && isTeamSpace.value && canEdit.value) websocket.sendMessage({ type: PICTURE_EDIT_MESSAGE_TYPE_ENUM.EDIT_ACTION, editAction: action, editData: { state: clone() } }) }
+const sync = (_action: string) => {
+  if (!isTeamSpace.value || !canExitEdit.value) return
+  if (!dirty.value && sharedSession.value) localBase = { id: String(sharedSession.value.id), revision: sharedSession.value.revision }
+  dirty.value = true
+  window.clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(() => { void flushDraft().catch(showError) }, 650)
+}
 const commit = (action: string, change: () => void) => { if (!canEdit.value) return; remember(); change(); render(); sync(action) }
 
 const zoom = (value: number) => commit(value > 0 ? PICTURE_EDIT_ACTION_ENUM.ZOOM_IN : PICTURE_EDIT_ACTION_ENUM.ZOOM_OUT, () => state.value.scale = Math.min(2.5, Math.max(0.2, Number((state.value.scale + value).toFixed(2)))))
@@ -313,14 +362,15 @@ const leavePointer = (event: PointerEvent) => {
   hoveredStickerId.value = undefined
 }
 const applyState = async (next: EditorState) => { const changed = next.baseImageUrl !== state.value.baseImageUrl; state.value = JSON.parse(JSON.stringify(next)) as EditorState; if (changed) { try { await loadSource(next.baseImageUrl) } catch (error) { message.error(error instanceof Error ? error.message : '协同图片加载失败') } } else render() }
-const undo = () => { const previous = history.value.pop(); if (!previous) return; future.value.unshift(snapshot()); void applyState(JSON.parse(previous) as EditorState); sync(PICTURE_EDIT_ACTION_ENUM.UNDO) }
-const redo = () => { const next = future.value.shift(); if (!next) return; history.value.push(snapshot()); void applyState(JSON.parse(next) as EditorState); sync(PICTURE_EDIT_ACTION_ENUM.REDO) }
+const undo = () => { if (isTeamSpace.value) { void sharedHistory('undo').catch(showError); return }; const previous = history.value.pop(); if (!previous) return; future.value.unshift(snapshot()); void applyState(JSON.parse(previous) as EditorState) }
+const redo = () => { if (isTeamSpace.value) { void sharedHistory('redo').catch(showError); return }; const next = future.value.shift(); if (!next) return; history.value.push(snapshot()); void applyState(JSON.parse(next) as EditorState) }
 const resetEditor = async (record: boolean) => { if (!props.imageUrl) return; if (record) remember(); state.value = defaults(props.imageUrl); try { await loadSource(props.imageUrl); if (record) sync(PICTURE_EDIT_ACTION_ENUM.RESET) } catch (error) { message.error(error instanceof Error ? error.message : '图片加载失败') } }
 
 const aiRef = ref<InstanceType<typeof ImageAiEditor>>()
-const openAiEditor = () => aiRef.value?.openModal()
+const openAiEditor = () => { if (isTeamSpace.value) { void switchMode('agent'); return }; aiRef.value?.openModal() }
 const applyAiResult = async (url: string) => { remember(); state.value.baseImageUrl = url; try { await loadSource(url); sync(PICTURE_EDIT_ACTION_ENUM.AI_EDIT) } catch (error) { const previous = history.value.pop(); if (previous) await applyState(JSON.parse(previous) as EditorState); message.error(error instanceof Error ? error.message : 'AI 编辑结果载入失败') } }
 const saveImage = () => {
+  if (isTeamSpace.value) { void saveShared().catch(showError); return }
   const canvas = canvasRef.value
   if (!canvas || !sourceImage.value) return
   loading.value = true
@@ -333,7 +383,7 @@ const saveImage = () => {
       }
       const file = new File([blob], (props.picture?.name || 'image') + '.png', { type: 'image/png' })
       try {
-        const params: API.PictureUploadRequest = props.picture?.id ? { id: props.picture.id } : {}
+        const params: API.PictureUploadRequest = props.picture?.id ? { id: props.picture.id, expectedEditVersion: personalVersion.value } : {}
         params.spaceId = props.spaceId
         const res = await uploadPictureUsingPost(params, {}, file)
         const response = res.data as API.BaseResponsePictureVO_
@@ -355,18 +405,215 @@ const saveImage = () => {
 
 const initWebsocket = () => {
   const id = props.picture?.id; if (!id || !isTeamSpace.value || !visible.value) return; websocket?.disconnect(); websocket = new PictureEditWebSocket(id); websocket.connect()
-  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.INFO, (msg) => { updatePresence(msg); message.info(msg.message); if (canExitEdit.value) window.setTimeout(() => sync(PICTURE_EDIT_ACTION_ENUM.SYNC_STATE), 80) })
+  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.INFO, (msg) => { updatePresence(msg) })
   websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.ERROR, (msg) => message.error(msg.message))
-  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.ENTER_EDIT, (msg) => { updatePresence(msg); message.info(msg.message); if (sameUser(msg.user?.id, userStore.loginUser.id)) window.setTimeout(() => sync(PICTURE_EDIT_ACTION_ENUM.SYNC_STATE), 80) })
-  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.EDIT_ACTION, (msg) => { updatePresence(msg); const remote = msg.editData?.state as EditorState | undefined; if (remote) void applyState(remote); if (msg.editAction !== PICTURE_EDIT_ACTION_ENUM.SYNC_STATE && msg.editAction !== PICTURE_EDIT_ACTION_ENUM.BRUSH_STROKE) message.info(msg.message) })
-  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.EXIT_EDIT, (msg) => { updatePresence(msg); message.info(msg.message) })
+  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.ENTER_EDIT, updatePresence)
+  websocket.on(PICTURE_EDIT_MESSAGE_TYPE_ENUM.EXIT_EDIT, updatePresence)
+  websocket.on('COLLABORATION_CHANGED', (msg) => { updatePresence(msg); void refreshShared().catch(() => undefined) })
 }
-const enterEdit = () => websocket?.sendMessage({ type: PICTURE_EDIT_MESSAGE_TYPE_ENUM.ENTER_EDIT })
-const exitEdit = () => websocket?.sendMessage({ type: PICTURE_EDIT_MESSAGE_TYPE_ENUM.EXIT_EDIT })
-const openModal = async () => { visible.value = true; viewerUsers.value = []; history.value = []; future.value = []; await nextTick(); await resetEditor(false); if (isTeamSpace.value) initWebsocket() }
-const closeModal = () => { if (canExitEdit.value) exitEdit(); websocket?.disconnect(); websocket = null; editingUser.value = undefined; viewerUsers.value = []; activeStroke.value = undefined; hoveredStickerId.value = undefined; dragState.value = undefined; visible.value = false }
-watch(() => props.imageUrl, (url) => { if (visible.value && url && url !== state.value.baseImageUrl) void resetEditor(false) })
-onUnmounted(() => websocket?.disconnect())
+function showError(error: unknown) { message.error(error instanceof Error ? error.message : '协同操作失败，草稿已保留') }
+function collaborationContext() {
+  return { clientId, epoch: sharedSession.value?.collaboration?.epoch ?? 0, expectedRevision: sharedSession.value?.revision ?? 0 }
+}
+function acceptShared(data: AgentSessionVO) {
+  if (!acceptsPictureSnapshot(sharedSession.value, data)) return false
+  if (dirty.value && !draftSaving.value && !pendingSave && localBase && (localBase.id !== String(data.id) || localBase.revision !== data.revision)) localConflict.value = true
+  sharedSession.value = data
+  now.value = Date.now()
+  setPictureCollaborationContext(data, collaborationContext())
+  return true
+}
+async function renderShared() {
+  const data = sharedSession.value
+  if (!data || dirty.value || activeStroke.value || dragState.value) return
+  const quick = data.document?.quickEditorState as EditorState | undefined
+  const next = quick ?? defaults(`/api/picture/${props.picture?.id}/collaboration/canvas?revision=${data.revision}`)
+  await nextTick()
+  await applyState(next)
+  if (!sourceImage.value) await loadSource(next.baseImageUrl)
+}
+let refreshingShared = false
+async function refreshShared() {
+  if (!props.picture?.id || !visible.value || refreshingShared || draftSaving.value) return
+  refreshingShared = true
+  try {
+    const res = await getPictureCollaboration(props.picture.id)
+    if (res.data.code !== 0) throw new Error(res.data.message || '共享工程读取失败')
+    if (!visible.value) return
+    const old = sharedSession.value
+    if (!acceptShared(res.data.data)) return
+    if (editorMode.value === 'manual' && (old?.id !== res.data.data.id || old?.revision !== res.data.data.revision)) await renderShared()
+  } finally { refreshingShared = false }
+}
+async function flushDraft() {
+  window.clearTimeout(saveTimer)
+  if (flushPromise) return flushPromise
+  if (!dirty.value) return
+  if (localConflict.value) throw new Error('共享画布已更新，请先处理保留的本地草稿')
+  const job = async () => {
+    if (!canExitEdit.value || !props.picture?.id) throw new Error('编辑权已变化，本地草稿保留在当前窗口，请先获取编辑权')
+    draftSaving.value = true
+    try {
+      if (!pendingSave) {
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())))
+        const blob = await new Promise<Blob>((resolve, reject) => canvasRef.value?.toBlob((value) => value ? resolve(value) : reject(new Error('画布导出失败')), 'image/png'))
+        pendingSave = { blob, state: clone(), key: crypto.randomUUID(), context: collaborationContext() }
+      }
+      const pending = pendingSave
+      const res = await savePictureCanvas(props.picture.id, pending.context, pending.state, pending.blob, pending.key)
+      if (res.data.code !== 0) throw new Error(res.data.message || '共享草稿保存失败')
+      dirty.value = false
+      localBase = undefined; localConflict.value = false
+      pendingSave = undefined
+      acceptShared(res.data.data)
+    } finally { draftSaving.value = false }
+  }
+  flushPromise = job().finally(() => { flushPromise = undefined })
+  return flushPromise
+}
+async function enterEdit() {
+  try {
+    if (!props.picture?.id) return
+    const res = await changePictureLease(props.picture.id, 'acquire', collaborationContext())
+    if (res.data.code !== 0) throw new Error(res.data.message || '获取编辑权失败')
+    acceptShared(res.data.data)
+    // Preserve unsaved local work after a transient failure instead of silently replacing it.
+    if (dirty.value) {
+      if (localBase && (localBase.id !== String(res.data.data.id) || localBase.revision !== res.data.data.revision)) localConflict.value = true
+      if (!localConflict.value) { pendingSave = undefined; await flushDraft() }
+    }
+    else if (editorMode.value === 'manual') await ensureManual()
+  } catch (error) { showError(error) }
+}
+async function applyLocalDraft() {
+  if (!canExitEdit.value || !sharedSession.value) return
+  localConflict.value = false; pendingSave = undefined
+  localBase = { id: String(sharedSession.value.id), revision: sharedSession.value.revision }
+  try { await flushDraft() } catch (error) { localConflict.value = true; showError(error) }
+}
+async function discardLocalDraft() {
+  dirty.value = false; localConflict.value = false; localBase = undefined; pendingSave = undefined
+  try { await refreshShared(); await ensureManual() } catch (error) { showError(error) }
+}
+async function ensureManual() {
+  if (!props.picture?.id || !sharedSession.value) return
+  if (canExitEdit.value && !sharedSession.value.document?.quickEditorState) {
+    const res = await prepareManualCanvas(props.picture.id, collaborationContext())
+    if (res.data.code !== 0) throw new Error(res.data.message || '画布合成失败')
+    acceptShared(res.data.data)
+  }
+  await renderShared()
+}
+async function exitEdit() {
+  try {
+    await flushDraft()
+    if (!canExitEdit.value || !props.picture?.id) return
+    const res = await changePictureLease(props.picture.id, 'release', collaborationContext())
+    if (res.data.code !== 0) throw new Error(res.data.message || '释放编辑权失败')
+    acceptShared(res.data.data)
+  } catch (error) { showError(error) }
+}
+async function handoffEdit() {
+  try {
+    await flushDraft()
+    if (!props.picture?.id || !handoffTarget.value) return
+    const res = await changePictureLease(props.picture.id, 'handoff', collaborationContext(), handoffTarget.value)
+    if (res.data.code !== 0) throw new Error(res.data.message || '交接失败')
+    acceptShared(res.data.data); handoffTarget.value = undefined
+  } catch (error) { showError(error) }
+}
+async function switchMode(mode: 'manual' | 'agent' | 'annotations') {
+  try {
+    if (mode === editorMode.value) return
+    if (editorMode.value === 'annotations') await annotationsRef.value?.leave()
+    await flushDraft()
+    if (mode === 'annotations' && canExitEdit.value && props.picture?.id) {
+      const result = await changePictureLease(props.picture.id, 'release', collaborationContext())
+      if (result.data.code !== 0) throw new Error(result.data.message || '释放独占编辑权失败')
+      acceptShared(result.data.data)
+    }
+    editorMode.value = mode
+    if (mode === 'manual' && isTeamSpace.value) await ensureManual()
+  } catch (error) { showError(error) }
+}
+function receiveAgentSnapshot(data: AgentSessionVO) { acceptShared(data) }
+async function sharedHistory(action: 'undo' | 'redo') {
+  await flushDraft()
+  if (!sharedSession.value) return
+  const res = await (action === 'undo' ? undoAgentSession : redoAgentSession)(sharedSession.value.id)
+  if (res.data.code !== 0) throw new Error(res.data.message || '历史操作失败')
+  acceptShared(res.data.data)
+  await ensureManual()
+}
+async function saveShared() {
+  await flushDraft()
+  if (!sharedSession.value || !canExitEdit.value) return
+  loading.value = true
+  try {
+    const data = sharedSession.value
+    if (!data.currentAssetId) throw new Error('没有可提交的画布')
+    const res = await commitAgentSession(data.id, data.currentAssetId, data.baseEditVersion)
+    if (res.data.code !== 0) throw new Error(res.data.message || '提交失败')
+    await onSharedCommitted()
+  } finally { loading.value = false }
+}
+async function onSharedCommitted() {
+  if (!props.picture?.id) return
+  const result = await getPictureVoByIdUsingGet({ id: props.picture.id })
+  if (result.data.code === 0 && result.data.data) props.onSuccess?.(result.data.data)
+  message.success('共享编辑结果已保存为正式版本')
+  dirty.value = false
+  // Commit ends this draft; no release request may act on the newly created draft.
+  cleanupShared()
+  visible.value = false
+}
+function cleanupShared() {
+  window.clearInterval(pollTimer); window.clearInterval(renewTimer); window.clearTimeout(saveTimer)
+  if (sharedSession.value) clearPictureCollaborationContext(sharedSession.value.id)
+  websocket?.disconnect(); websocket = null
+  sharedSession.value = undefined
+  viewerUsers.value = []; activeStroke.value = undefined; hoveredStickerId.value = undefined; dragState.value = undefined
+}
+const openModal = async (mode: 'manual' | 'agent' = 'manual') => {
+  personalVersion.value = props.picture?.editVersion ?? 0
+  visible.value = true; editorMode.value = mode; viewerUsers.value = []; history.value = []; future.value = []; dirty.value = false; localConflict.value = false; localBase = undefined; pendingSave = undefined
+  await nextTick()
+  if (!isTeamSpace.value) { await resetEditor(false); return }
+  try {
+    await refreshShared(); await renderShared(); initWebsocket()
+    pollTimer = window.setInterval(() => { now.value = Date.now(); void refreshShared().catch(() => undefined) }, 2000)
+    renewTimer = window.setInterval(async () => {
+      if (!canExitEdit.value || !props.picture?.id) return
+      try {
+        const res = await changePictureLease(props.picture.id, 'renew', collaborationContext())
+        if (res.data.code === 0) acceptShared(res.data.data)
+        else { now.value = Number.MAX_SAFE_INTEGER; message.warning(res.data.message || '编辑权续租失败') }
+      } catch { /* Local expiry disables editing until a successful refresh. */ }
+    }, 20000)
+  } catch (error) { showError(error) }
+}
+const closeModal = async () => {
+  try {
+    if (editorMode.value === 'annotations') await annotationsRef.value?.leave()
+    if (isTeamSpace.value) {
+      await flushDraft()
+      if (canExitEdit.value && props.picture?.id) {
+        const res = await changePictureLease(props.picture.id, 'release', collaborationContext())
+        if (res.data.code !== 0) throw new Error(res.data.message || '释放编辑权失败，请重试')
+      }
+    }
+    cleanupShared(); visible.value = false
+  } catch (error) { showError(error) }
+}
+const reloadPersonal = async () => {
+  personalVersion.value = props.picture?.editVersion ?? 0
+  history.value = []; future.value = []
+  await resetEditor(false)
+}
+onUnmounted(() => {
+  if (canExitEdit.value && props.picture?.id) void changePictureLease(props.picture.id, 'release', collaborationContext()).catch(() => undefined)
+  cleanupShared()
+})
 defineExpose({ openModal })
 </script>
 

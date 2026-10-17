@@ -89,6 +89,7 @@
               <a-button v-if="canEdit" :icon="h(EditOutlined)" type="default" @click="doEdit">
                 编辑
               </a-button>
+              <a-button v-if="space?.spaceType === 1" @click="collaborationRef?.openModal()">协同图片工作台</a-button>
               <a-button
                 v-if="canEdit"
                 :icon="h(RobotOutlined)"
@@ -106,12 +107,13 @@
         </a-col>
       </a-row>
       <ShareModal ref="shareModalRef" :link="shareLink" />
+      <ImageCropper ref="collaborationRef" :picture="picture" :image-url="picture.url" :space-id="picture.spaceId" :space="space" :on-success="onCollaborativeSaved" />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, ref } from 'vue'
+import { computed, h, onMounted, onBeforeUnmount, ref } from 'vue'
 import { deletePictureUsingPost, getPictureVoByIdUsingGet } from '@/api/pictureController.ts'
 import { message } from 'ant-design-vue'
 import { useRoute } from 'vue-router'
@@ -127,6 +129,11 @@ import {
 import router from '@/router'
 import { SPACE_PERMISSION_ENUM } from '@/constants/space.ts'
 import ShareModal from '@/components/ShareModal.vue'
+import ImageCropper from '@/components/ImageCropper.vue'
+import { getSpaceVoByIdUsingGet } from '@/api/spaceController'
+const collaborationRef = ref<InstanceType<typeof ImageCropper>>()
+const space = ref<API.SpaceVO>()
+function onCollaborativeSaved(data: API.PictureVO) { picture.value = data }
 
 const route = useRoute()
 
@@ -168,7 +175,7 @@ const doDelete = async () => {
     message.error('图片 id 不能为空')
     return
   }
-  const res = await deletePictureUsingPost({ id })
+  const res = await deletePictureUsingPost({ id, expectedEditVersion: picture.value.editVersion ?? 0 })
   if (res.data.code === 0) {
     message.success('删除成功')
   } else {
@@ -189,6 +196,10 @@ const fetchPictureDetail = async () => {
     // console.log("获取图片详情:", res)
     if (res.data.code === 0 && res.data.data) {
       picture.value = res.data.data
+      if (picture.value.spaceId) {
+        const result = await getSpaceVoByIdUsingGet({ id: picture.value.spaceId })
+        if (result.data.code === 0) space.value = result.data.data
+      }
       accessState.value = 'granted'
       return true
     }
@@ -213,6 +224,7 @@ const doEdit = () => {
 }
 // 进入 Agent 精修工作台
 const doAgentEdit = () => {
+  if (space.value?.spaceType === 1) { void collaborationRef.value?.openModal('agent'); return }
   router.push({
     path: `/agent/picture/${picture.value.id}`,
     query: {
@@ -246,9 +258,23 @@ const doShare = () => {
   }
 }
 
-onMounted(() => {
-  fetchPictureDetail()
+onMounted(async () => {
+  if (await fetchPictureDetail() && route.query.collaborate && space.value?.spaceType === 1) await collaborationRef.value?.openModal('agent')
 })
+let refreshTimer: ReturnType<typeof setTimeout> | undefined
+let disposed = false
+async function refreshVisiblePicture() {
+  try {
+    if (!document.hidden && accessState.value === 'granted') {
+      const res = await getPictureVoByIdUsingGet({ id: String(props.id) })
+      if (!disposed && res.data.code === 0 && res.data.data) picture.value = res.data.data
+      else if (!disposed && res.data.code !== 0) accessState.value = 'denied'
+    }
+  } catch { /* A transient network failure does not clear the current view. */ }
+  finally { if (!disposed) refreshTimer = setTimeout(refreshVisiblePicture, 5000) }
+}
+onMounted(() => { refreshTimer = setTimeout(refreshVisiblePicture, 5000) })
+onBeforeUnmount(() => { disposed = true; clearTimeout(refreshTimer) })
 </script>
 
 <style scoped>

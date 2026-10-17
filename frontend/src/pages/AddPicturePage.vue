@@ -35,7 +35,7 @@
           :icon="h(FullscreenOutlined)"
           @click="doImagePainting"
         >
-          AI 扩图
+          {{ space?.spaceType === 1 ? '协同 AI 编辑' : 'AI 扩图' }}
         </a-button>
       </a-space>
 
@@ -123,7 +123,7 @@ const uploadType = ref<'file' | 'url'>('file')
 
 // 空间 id
 const spaceId = computed<string | undefined>(() => {
-  const value = route.query?.spaceId
+  const value = route.query?.spaceId ?? picture.value?.spaceId
   if (!value) return undefined
   const raw = String(Array.isArray(value) ? value[0] : value)
   return /^\d+$/.test(raw) && raw !== '0' ? raw : undefined
@@ -139,14 +139,18 @@ const onSuccess = (newPicture: API.PictureVO) => {
  * @param values
  */
 const handleSubmit = async (values: any) => {
+  if (submitting.value) return
   const pictureId = picture.value?.id
   if (!pictureId) {
     return
   }
+  submitting.value = true
+  try {
   const res = await editPictureUsingPost({
     id: pictureId,
     spaceId: spaceId.value,
     ...values,
+    expectedEditVersion: picture.value?.editVersion ?? 0,
   })
   // 操作成功
   if (res.data.code === 0 && res.data.data) {
@@ -158,7 +162,9 @@ const handleSubmit = async (values: any) => {
   } else {
     message.error('上传失败，' + res.data.message)
   }
+  } finally { submitting.value = false }
 }
+const submitting = ref(false)
 
 const categoryOptions = ref<{ value: string; label: string }[]>([])
 const tagOptions = ref<{ value: string; label: string }[]>([])
@@ -190,6 +196,7 @@ const imageOutPaintingRef = ref()
 
 // 打开 AI 扩图弹窗
 const doImagePainting = async () => {
+  if (space.value?.spaceType === 1) { imageCropperRef.value?.openModal('agent'); return }
   imageOutPaintingRef.value?.openModal()
 }
 
@@ -227,12 +234,14 @@ const space = ref<API.SpaceVO>()
 
 // 获取空间信息
 const fetchSpace = async () => {
+  const target = spaceId.value
+  if (!target) { space.value = undefined; return }
   // 获取数据
-  if (spaceId.value) {
+  if (target) {
     const res = await getSpaceVoByIdUsingGet({
-      id: spaceId.value,
+      id: target,
     })
-    if (res.data.code === 0 && res.data.data) {
+    if (spaceId.value === target && res.data.code === 0 && res.data.data) {
       space.value = res.data.data
     }
   }

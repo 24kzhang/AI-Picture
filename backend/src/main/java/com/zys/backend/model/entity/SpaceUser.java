@@ -18,6 +18,7 @@ public class SpaceUser {
      */
     @TableId(type = IdType.AUTO)
     private Long id;
+    private Long mutationVersion;
 
     /**
      * 空间 id

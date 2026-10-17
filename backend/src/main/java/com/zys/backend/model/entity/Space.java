@@ -21,6 +21,7 @@ public class Space {
      */
     @TableId(type = IdType.ASSIGN_ID)
     private Long id;
+    private Long mutationVersion;
 
     /**
      * 空间名称

@@ -32,6 +32,9 @@ import java.util.List;
 @Slf4j
 @Service
 public class PlanExecutor {
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private PictureCollaborationService collaboration;
 
     @Resource
     private PictureAgentRunMapper agentRunMapper;
@@ -82,6 +85,7 @@ public class PlanExecutor {
     public PictureAgentRun confirm(Long runId, User loginUser) {
         PictureAgentRun run = requireRun(runId);
         checkOperator(run, loginUser);
+        if (collaboration.shared(run.getEditSessionId())) collaboration.requireRun(run, loginUser, false);
         if (!AgentRunStatusEnum.WAITING.getValue().equals(run.getStatus())) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "当前运行不在等待确认状态");
         }
@@ -145,6 +149,7 @@ public class PlanExecutor {
     public PictureAgentRun retry(Long runId, User loginUser) {
         PictureAgentRun run = requireRun(runId);
         checkOperator(run, loginUser);
+        if (collaboration.shared(run.getEditSessionId())) collaboration.requireRun(run, loginUser, false);
         String status = run.getStatus();
         if (!AgentRunStatusEnum.FAILED.getValue().equals(status)
                 && !AgentRunStatusEnum.CANCELED.getValue().equals(status)) {
@@ -347,6 +352,10 @@ public class PlanExecutor {
     }
 
     private void checkOperator(PictureAgentRun run, User loginUser) {
+        if (collaboration.shared(run.getEditSessionId())) {
+            collaboration.requireRun(run, loginUser, true);
+            return;
+        }
         if (loginUser == null || !loginUser.getId().equals(run.getUserId())) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "只有发起人可以操作该运行");
         }

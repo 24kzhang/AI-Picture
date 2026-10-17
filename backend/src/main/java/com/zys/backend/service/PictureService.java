@@ -104,7 +104,7 @@ public interface PictureService extends IService<Picture> {
      * @param pictureId
      * @param loginUser
      */
-    void deletePicture(long pictureId, User loginUser);
+    void deletePicture(long pictureId, User loginUser, Long expectedEditVersion);
 //
 //    /**
 //     * 编辑图片

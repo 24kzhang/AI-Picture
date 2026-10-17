@@ -14,6 +14,7 @@ public class SpaceUpdateRequest implements Serializable {
      * id
      */
     private Long id;
+    private Long expectedMutationVersion;
 
     /**
      * 空间名称

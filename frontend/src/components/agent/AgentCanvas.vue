@@ -12,9 +12,10 @@
           v-model:value="brushSize"
           :min="8"
           :max="120"
+          :disabled="!editable"
           style="width: 120px"
         />
-        <a-button size="small" type="primary" :disabled="!hasStrokes" @click="confirmSelection">
+        <a-button size="small" type="primary" :disabled="!editable || !hasStrokes" @click="confirmSelection">
           确定选区
         </a-button>
         <a-button size="small" :disabled="!hasStrokes" @click="resetStrokes">清除</a-button>
@@ -231,7 +232,7 @@ function onStageMouseDown(event: MouseEvent) {
 }
 
 function onMouseMove(event: MouseEvent) {
-  if (!drawing.value) return
+  if (!drawing.value || !props.editable) return
   const point = stagePoint(event)
   if (selectionMode.value === 'rect') {
     const x = Math.min(startPoint.value.x, point.x)
@@ -294,6 +295,7 @@ function resetStrokes() {
  * 生成黑白 mask（白=生效区域）并回传标记数据
  */
 function confirmSelection() {
+  if (!props.editable) return
   const canvas = document.createElement('canvas')
   canvas.width = docWidth.value
   canvas.height = docHeight.value
@@ -321,7 +323,7 @@ function confirmSelection() {
     markers.push({ type: 'brush', size: stroke.size, points: stroke.points.slice(0, 200) })
   }
   canvas.toBlob((blob) => {
-    if (blob) {
+    if (blob && props.editable) {
       emit('selection', { maskBlob: blob, markers })
     }
   }, 'image/png')
@@ -337,7 +339,9 @@ watch(selectionMode, (mode) => {
     rectPreview.value = null
   }
 })
-
+watch(() => props.editable, (editable) => {
+  if (!editable) { onMouseUp(); selectionMode.value = 'none'; resetStrokes() }
+})
 onUnmounted(()=>{onMouseUp();viewportObserver?.disconnect();window.removeEventListener('resize',measure)})
 
 // endregion

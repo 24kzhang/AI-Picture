@@ -135,13 +135,13 @@ class AgentRunControllerTest {
         step.setId("s1");
         snapshot.setPlan(Collections.singletonList(step));
         SseEmitter emitter = new SseEmitter();
-        when(eventPublisher.subscribe(eq(run.getId()), any(AgentRunEventVO.class))).thenReturn(emitter);
+        when(eventPublisher.subscribe(eq(run.getId()), any(AgentRunEventVO.class), any(Runnable.class))).thenReturn(emitter);
 
         SseEmitter response = controller.events(run.getId(), request);
 
         assertSame(emitter, response);
         ArgumentCaptor<AgentRunEventVO> captor = ArgumentCaptor.forClass(AgentRunEventVO.class);
-        verify(eventPublisher).subscribe(eq(run.getId()), captor.capture());
+        verify(eventPublisher).subscribe(eq(run.getId()), captor.capture(), any(Runnable.class));
         AgentRunEventVO event = captor.getValue();
         assertEquals("snapshot", event.getEvent());
         assertEquals(run.getId(), event.getRunId());

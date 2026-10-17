@@ -14,6 +14,7 @@ public class SpaceUserEditRequest implements Serializable {
      * id
      */
     private Long id;
+    private Long expectedMutationVersion;
 
     /**
      * 空间角色：viewer/editor/admin

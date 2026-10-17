@@ -77,13 +77,17 @@ const formData = reactive<API.PictureEditByBatchRequest>({
  * @param values
  */
 const handleSubmit = async (values: any) => {
+  if (submitting.value) return
   if (!props.pictureList) {
     return
   }
+  submitting.value = true
+  try {
   const res = await editPictureByBatchUsingPost({
     pictureIdList: props.pictureList.map((picture) => picture.id),
     spaceId: props.spaceId,
     ...values,
+    expectedVersions: Object.fromEntries(props.pictureList.map(p => [String(p.id), p.editVersion ?? 0])),
   })
   // 操作成功
   if (res.data.code === 0 && res.data.data) {
@@ -93,7 +97,9 @@ const handleSubmit = async (values: any) => {
   } else {
     message.error('操作失败，' + res.data.message)
   }
+  } finally { submitting.value = false }
 }
+const submitting = ref(false)
 
 const categoryOptions = ref<{ value: string; label: string }[]>([])
 const tagOptions = ref<{ value: string; label: string }[]>([])

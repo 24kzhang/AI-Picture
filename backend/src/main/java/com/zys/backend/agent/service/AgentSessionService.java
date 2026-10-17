@@ -99,6 +99,10 @@ public class AgentSessionService {
     @Resource
     private ToolRegistry toolRegistry;
 
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private PictureCollaborationService collaboration;
+
     // region 会话生命周期
 
     /**
@@ -107,6 +111,7 @@ public class AgentSessionService {
     public AgentSessionVO createOrReuse(Long pictureId, User loginUser) {
         Picture picture = requirePicture(pictureId);
         authService.requireEdit(loginUser, picture);
+        if (collaboration.isTeam(picture)) return collaboration.snapshot(pictureId, loginUser);
 
         PictureEditSession existing = findReusableSession(pictureId, loginUser.getId());
         if (existing != null) {
@@ -121,6 +126,18 @@ public class AgentSessionService {
                             ? "快捷编辑" : "其他用户") + "占用，请稍后再试");
         }
 
+        if (editLeaseService.tryAcquire(pictureId, AgentConstant.EDIT_LOCK_MODE_AGENT, loginUser.getId(), null) == null) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, "图片已被其他会话占用");
+        }
+        PictureEditSession session = initializeShared(picture, loginUser);
+        editLeaseService.forceAcquire(pictureId, AgentConstant.EDIT_LOCK_MODE_AGENT,
+                loginUser.getId(), session.getId());
+        return getSnapshot(session.getId(), loginUser);
+    }
+
+    /** Internal factory: viewing a shared draft does not acquire its editing lease. */
+    public PictureEditSession initializeShared(Picture picture, User loginUser) {
+        Long pictureId = picture.getId();
         PictureAgentAsset original = assetService.createReference(0L, pictureId, loginUser.getId(),
                 AgentAssetKindEnum.ORIGINAL.getValue(), "session-init",
                 picture.getUrl(), picture.getPicWidth(), picture.getPicHeight(), picture.getPicSize());
@@ -151,11 +168,9 @@ public class AgentSessionService {
         sessionMapper.updateById(docUpdate);
         session.setDocumentJson(document.toString());
 
-        editLeaseService.forceAcquire(pictureId, AgentConstant.EDIT_LOCK_MODE_AGENT,
-                loginUser.getId(), session.getId());
         log.info("创建 Agent 编辑会话，sessionId={}，pictureId={}，userId={}，baseEditVersion={}",
                 session.getId(), pictureId, loginUser.getId(), session.getBaseEditVersion());
-        return getSnapshot(session.getId(), loginUser);
+        return session;
     }
 
     private void updateAssetSession(Long assetId, Long sessionId) {
@@ -187,6 +202,13 @@ public class AgentSessionService {
     // region 租约
 
     public JSONObject renewLease(PictureEditSession session, User loginUser) {
+        if (collaboration.shared(session.getId())) {
+            collaboration.requireEditor(session, loginUser);
+            if (!editLeaseService.renew(session.getPictureId(), AgentConstant.EDIT_LOCK_MODE_AGENT, loginUser.getId(), session.getId())) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "编辑租约已失效");
+            }
+            return editLeaseService.get(session.getPictureId());
+        }
         boolean renewed = editLeaseService.renew(session.getPictureId(),
                 AgentConstant.EDIT_LOCK_MODE_AGENT, loginUser.getId(), session.getId());
         if (!renewed) {
@@ -229,6 +251,7 @@ public class AgentSessionService {
         run.setGoal(message.trim());
         run.setStatus(AgentRunStatusEnum.PLANNING.getValue());
         agentRunMapper.insert(run);
+        collaboration.captureRun(run);
         publishRunEvent(run, "progress", null);
 
         List<com.zys.backend.agent.model.PlanStep> steps;
@@ -294,6 +317,7 @@ public class AgentSessionService {
         run.setStatus(AgentRunStatusEnum.RUNNING.getValue());
         run.setPlanJson(JSONUtil.toJsonStr(steps));
         agentRunMapper.insert(run);
+        collaboration.captureRun(run);
         planExecutor.start(run, steps);
         PictureAgentRun latest = agentRunMapper.selectById(run.getId());
         return snapshotService.build(latest == null ? run : latest);
@@ -325,6 +349,7 @@ public class AgentSessionService {
     /**
      * 采用资产墙某张图为当前画布（切换候选图）
      */
+    @org.springframework.transaction.annotation.Transactional
     public AgentSessionVO adoptAsset(Long sessionId, User loginUser, Long assetId) {
         PictureEditSession session = requireSession(sessionId, loginUser, true);
         requireActive(session);
@@ -341,6 +366,7 @@ public class AgentSessionService {
     /**
      * 撤销
      */
+    @org.springframework.transaction.annotation.Transactional
     public AgentSessionVO undo(Long sessionId, User loginUser) {
         PictureEditSession session = requireSession(sessionId, loginUser, true);
         requireActive(session);
@@ -353,6 +379,7 @@ public class AgentSessionService {
     /**
      * 重做
      */
+    @org.springframework.transaction.annotation.Transactional
     public AgentSessionVO redo(Long sessionId, User loginUser) {
         PictureEditSession session = requireSession(sessionId, loginUser, true);
         requireActive(session);
@@ -365,6 +392,7 @@ public class AgentSessionService {
     /**
      * 选定最终草稿
      */
+    @org.springframework.transaction.annotation.Transactional
     public AgentSessionVO setFinalAsset(Long sessionId, User loginUser, Long assetId) {
         PictureEditSession session = requireSession(sessionId, loginUser, true);
         requireActive(session);
@@ -424,6 +452,9 @@ public class AgentSessionService {
         vo.setTools(toolRegistry.all().stream().map(AgentToolVO::from).collect(Collectors.toList()));
         vo.setCanUndo(documentService.canUndo(session));
         vo.setCanRedo(documentService.canRedo(session));
+        if (collaboration.shared(sessionId)) {
+            vo.setCollaboration(collaboration.info(sessionId));
+        }
         return vo;
     }
 
@@ -456,6 +487,12 @@ public class AgentSessionService {
         return picture;
     }
 
+    public PictureEditSession requireCommitSession(Long sessionId, User loginUser) {
+        PictureEditSession session = requireSession(sessionId, loginUser, false);
+        if (collaboration.shared(sessionId) && EditSessionStatusEnum.COMMITTED.getValue().equals(session.getStatus())) return session;
+        return requireSession(sessionId, loginUser, true);
+    }
+
     public PictureEditSession requireSession(Long sessionId, User loginUser, boolean needEdit) {
         PictureEditSession session = sessionMapper.selectById(sessionId);
         if (session == null) {
@@ -464,6 +501,11 @@ public class AgentSessionService {
         Picture picture = requirePicture(session.getPictureId());
         if (needEdit) {
             authService.requireEdit(loginUser, picture);
+            if (collaboration.shared(sessionId)) {
+                if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) collaboration.lockEditor(session, loginUser);
+                else collaboration.requireEditor(session, loginUser);
+                return loadSession(sessionId);
+            }
             boolean owner = loginUser.getId().equals(session.getUserId());
             if (!owner && !userService.isAdmin(loginUser)) {
                 throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "只有会话创建者可以执行编辑操作");
@@ -501,6 +543,7 @@ public class AgentSessionService {
         return selectionService.prepareMask(session, maskBytes, format);
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public void saveSelection(Long sessionId, User loginUser, Long maskAssetId,
                               List<java.util.Map<String, Object>> markers, Integer clientRevision) {
         PictureEditSession session = requireSession(sessionId, loginUser, true);
@@ -522,6 +565,7 @@ public class AgentSessionService {
         return selectionService.getValidSelection(session);
     }
 
+    @org.springframework.transaction.annotation.Transactional
     public void clearSelection(Long sessionId, User loginUser) {
         PictureEditSession session = requireSession(sessionId, loginUser, true);
         selectionService.clear(session.getId());

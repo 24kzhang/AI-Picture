@@ -45,6 +45,7 @@ public class AgentEventPublisher {
      * runId -> 已注册的 Redis 监听（避免重复订阅）
      */
     private final Map<Long, AgentChannelListener> listeners = new ConcurrentHashMap<>();
+    private final Map<SseEmitter, Runnable> authorization = new ConcurrentHashMap<>();
 
     /**
      * 发布运行事件（跨节点广播）
@@ -68,7 +69,11 @@ public class AgentEventPublisher {
      * 订阅某个运行的 SSE 流。首包快照由调用方在返回前写入。
      */
     public SseEmitter subscribe(Long runId, AgentRunEventVO snapshot) {
+        return subscribe(runId, snapshot, null);
+    }
+    public SseEmitter subscribe(Long runId, AgentRunEventVO snapshot, Runnable revalidate) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+        if (revalidate != null) authorization.put(emitter, revalidate);
         List<SseEmitter> bucket = emitters.computeIfAbsent(runId, key -> new CopyOnWriteArrayList<>());
         bucket.add(emitter);
         ensureRedisSubscription(runId);
@@ -90,6 +95,7 @@ public class AgentEventPublisher {
     }
 
     private void removeEmitter(Long runId, SseEmitter emitter) {
+        authorization.remove(emitter);
         List<SseEmitter> bucket = emitters.get(runId);
         if (bucket == null) {
             return;
@@ -120,11 +126,16 @@ public class AgentEventPublisher {
 
     private void sendQuietly(SseEmitter emitter, AgentRunEventVO event) {
         try {
+            Runnable guard = authorization.get(emitter);
+            if (guard != null) guard.run();
             emitter.send(SseEmitter.event()
                     .name(StrUtil.blankToDefault(event.getEvent(), "message"))
                     .data(event));
         } catch (IOException | IllegalStateException e) {
             // 连接已断开，忽略；SSE 断开后前端重新拉取 run 快照再重连
+            emitter.complete();
+        } catch (com.zys.backend.exception.BusinessException denied) {
+            emitter.complete();
         }
     }
 

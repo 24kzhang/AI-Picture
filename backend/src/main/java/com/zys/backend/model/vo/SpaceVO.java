@@ -18,6 +18,7 @@ public class SpaceVO implements Serializable {
      * id
      */
     private Long id;
+    private Long mutationVersion;
 
     /**
      * 空间名称

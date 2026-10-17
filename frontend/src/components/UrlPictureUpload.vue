@@ -35,12 +35,14 @@ const loading = ref<boolean>(false)
  * @param file
  */
 const handleUpload = async () => {
+  if (loading.value) return
   loading.value = true
   try {
     const params: API.PictureUploadRequest = { fileUrl: fileUrl.value }
     params.spaceId = props.spaceId;
     if (props.picture) {
       params.id = props.picture.id
+      params.expectedEditVersion = props.picture.editVersion ?? 0
     }
     const res = await uploadPictureByUrlUsingPost(params)
     if (res.data.code === 0 && res.data.data) {

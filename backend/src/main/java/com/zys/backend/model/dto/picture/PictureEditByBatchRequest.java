@@ -15,6 +15,7 @@ public class PictureEditByBatchRequest implements Serializable {
      * 图片 id 列表
      */
     private List<Long> pictureIdList;
+    private java.util.Map<Long, Long> expectedVersions;
 
     /**
      * 空间 id

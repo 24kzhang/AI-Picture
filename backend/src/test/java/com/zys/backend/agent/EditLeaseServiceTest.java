@@ -43,6 +43,8 @@ class EditLeaseServiceTest {
         redisTemplate = mock(StringRedisTemplate.class);
         valueOperations = mock(ValueOperations.class);
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.execute(any(org.springframework.data.redis.core.script.RedisScript.class), any(java.util.List.class), anyString(), anyString(), anyString())).thenReturn(1L);
+        when(redisTemplate.execute(any(org.springframework.data.redis.core.script.RedisScript.class), any(java.util.List.class), anyString())).thenReturn(1L);
         ReflectionTestUtils.setField(leaseService, "stringRedisTemplate", redisTemplate);
     }
 
@@ -85,8 +87,7 @@ class EditLeaseServiceTest {
         when(valueOperations.get(KEY)).thenReturn(holder.toString());
         JSONObject lease = leaseService.tryAcquire(100L, AgentConstant.EDIT_LOCK_MODE_AGENT, 2L, 9L);
         assertNotNull(lease);
-        verify(valueOperations).set(eq(KEY), anyString(),
-                eq(AgentConstant.EDIT_LOCK_TTL_SECONDS), eq(TimeUnit.SECONDS));
+        verify(redisTemplate).execute(any(org.springframework.data.redis.core.script.RedisScript.class), eq(java.util.Collections.singletonList(KEY)), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -98,8 +99,7 @@ class EditLeaseServiceTest {
         when(valueOperations.get(KEY)).thenReturn(holder.toString());
 
         assertTrue(leaseService.renew(100L, AgentConstant.EDIT_LOCK_MODE_AGENT, 2L, 9L));
-        verify(valueOperations).set(eq(KEY), anyString(),
-                eq(AgentConstant.EDIT_LOCK_TTL_SECONDS), eq(TimeUnit.SECONDS));
+        verify(redisTemplate).execute(any(org.springframework.data.redis.core.script.RedisScript.class), eq(java.util.Collections.singletonList(KEY)), anyString(), anyString(), anyString());
 
         // 其他人无法续租，也不再写 key
         assertFalse(leaseService.renew(100L, AgentConstant.EDIT_LOCK_MODE_AGENT, 77L, 9L));
@@ -127,6 +127,13 @@ class EditLeaseServiceTest {
         verify(redisTemplate, never()).delete(any(String.class));
 
         assertTrue(leaseService.release(100L, AgentConstant.EDIT_LOCK_MODE_AGENT, 2L, 9L));
-        verify(redisTemplate).delete(KEY);
+        verify(redisTemplate).execute(any(org.springframework.data.redis.core.script.RedisScript.class), eq(java.util.Collections.singletonList(KEY)), anyString());
+    }
+    @Test void leaseChangedBetweenReadAndRenewIsRejected() {
+        when(valueOperations.get(KEY)).thenReturn(new JSONObject().set("mode","AGENT").set("userId","2").set("sessionId","9").toString());
+        when(redisTemplate.execute(any(org.springframework.data.redis.core.script.RedisScript.class),any(java.util.List.class),anyString(),anyString(),anyString())).thenReturn(0L);
+        when(redisTemplate.execute(any(org.springframework.data.redis.core.script.RedisScript.class),any(java.util.List.class),anyString())).thenReturn(0L);
+        assertFalse(leaseService.renew(100L,"AGENT",2L,9L));
+        assertFalse(leaseService.release(100L,"AGENT",2L,9L));
     }
 }

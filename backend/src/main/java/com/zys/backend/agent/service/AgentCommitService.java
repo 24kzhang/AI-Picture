@@ -41,6 +41,9 @@ import java.util.List;
 @Slf4j
 @Service
 public class AgentCommitService {
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private PictureCollaborationService collaboration;
 
     @Resource
     private PictureMapper pictureMapper;
@@ -56,7 +59,6 @@ public class AgentCommitService {
 
     @Resource
     private AgentAssetService assetService;
-
     @Resource
     private LayerDocumentService documentService;
 
@@ -83,6 +85,7 @@ public class AgentCommitService {
         // 幂等：已提交过直接返回既有版本
         if (EditSessionStatusEnum.COMMITTED.getValue().equals(session.getStatus())
                 && session.getCommittedVersionId() != null) {
+            if (collaboration.shared(session.getId())) collaboration.requireCommitReplay(session, loginUser, finalAssetId, expectedEditVersion);
             PictureVersion existing = versionMapper.selectById(session.getCommittedVersionId());
             if (existing != null) {
                 return PictureVersionVO.from(existing);
@@ -113,6 +116,7 @@ public class AgentCommitService {
                     "图片正式版本已被他人更新，会话进入冲突状态；草稿已保留，请重新创建会话后再提交");
         }
 
+        // The current canvas includes layer transforms/text; its backing asset alone is insufficient.
         byte[] bytes = java.util.Objects.equals(asset.getId(), session.getCurrentAssetId())
                 ? documentService.currentCanvasBytes(session) : assetService.loadBytes(asset);
         // 空间容量预检，避免无谓的 COS 写入
@@ -122,6 +126,10 @@ public class AgentCommitService {
 
         try {
             PictureVersion version = transactionTemplate.execute(status -> {
+                if (collaboration.shared(session.getId())) {
+                    collaboration.lockEditor(session, loginUser);
+                    collaboration.recordCommit(session, loginUser, asset.getId(), expectedEditVersion);
+                }
                 PictureVersion created = insertVersion(picture.getId(), stored,
                         PictureVersionSourceEnum.AGENT.getValue(), session.getId(), null, loginUser.getId());
                 boolean updated = pictureMapper.update(null, Wrappers.<Picture>lambdaUpdate()
@@ -158,6 +166,7 @@ public class AgentCommitService {
             });
             editLeaseService.release(session.getPictureId(),
                     AgentConstant.EDIT_LOCK_MODE_AGENT, loginUser.getId(), session.getId());
+            if (collaboration.shared(session.getId())) collaboration.changed(session.getPictureId());
             return PictureVersionVO.from(version);
         } catch (BusinessException e) {
             if ("VERSION_CONFLICT".equals(e.getMessage())) {
@@ -198,9 +207,16 @@ public class AgentCommitService {
                 detectFormat(bytes, StrUtil.subAfter(source.getUrl(), '.', true)), bytes);
         try {
             PictureVersion version = transactionTemplate.execute(status -> {
+                PictureEditSession shared = collaboration.lockPictureEditor(picture.getId(), loginUser);
                 PictureVersion created = insertVersion(picture.getId(), stored,
                         PictureVersionSourceEnum.RESTORE.getValue(), source.getSourceSessionId(),
                         source.getId(), loginUser.getId());
+                if (shared != null) {
+                    PictureEditSession ended = new PictureEditSession();
+                    ended.setId(shared.getId());
+                    ended.setStatus(EditSessionStatusEnum.CLOSED.getValue());
+                    sessionMapper.updateById(ended);
+                }
                 boolean updated = pictureMapper.update(null, Wrappers.<Picture>lambdaUpdate()
                         .eq(Picture::getId, picture.getId())
                         .eq(Picture::getEditVersion, expectedEditVersion)
@@ -304,10 +320,12 @@ public class AgentCommitService {
             return;
         }
         long delta = newSize - (oldSize == null ? 0L : oldSize);
-        spaceService.lambdaUpdate()
+        boolean updated = spaceService.lambdaUpdate()
                 .eq(Space::getId, spaceId)
+                .apply("totalSize + {0} <= maxSize", delta)
                 .setSql("totalSize = GREATEST(totalSize + (" + delta + "), 0)")
                 .update();
+        if (!updated) throw new BusinessException(ErrorCode.OPERATION_ERROR, "空间容量不足，提交未保存");
     }
 
     private void markConflict(Long sessionId) {

@@ -200,7 +200,7 @@ const doDelete = async (id: string) => {
   if (!id) {
     return
   }
-  const res = await deleteSpaceUsingPost({ id })
+  const res = await deleteSpaceUsingPost({ id, expectedMutationVersion: dataList.value.find(row => String(row.id) === String(id))?.mutationVersion ?? 0 })
   if (res.data.code === 0) {
     message.success('删除成功')
     // 刷新数据

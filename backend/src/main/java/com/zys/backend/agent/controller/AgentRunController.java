@@ -98,7 +98,10 @@ public class AgentRunController {
         first.setStatus(run.getStatus());
         first.setPlan(snapshot.getPlan());
         first.setErrorMessage(run.getErrorMessage());
-        return eventPublisher.subscribe(runId, first);
+        return eventPublisher.subscribe(runId, first, () -> {
+            User current = userService.getById(loginUser.getId());
+            agentSessionService.requireSession(run.getEditSessionId(), current, false);
+        });
     }
 
     private PictureAgentRun requireRunWithViewAuth(Long runId, User loginUser) {

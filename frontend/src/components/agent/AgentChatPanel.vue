@@ -4,11 +4,11 @@
       <div v-if="messages.length === 0" class="chat-empty">
         发送自然语言指令开始精修，例如：
         <div class="chat-suggestions">
-          <a-tag class="suggestion" @click="emit('send', '把背景换成白色')">把背景换成白色</a-tag>
-          <a-tag class="suggestion" @click="emit('send', '把背景换成白色并整体调亮')">
+          <a-tag class="suggestion" @click="editable && emit('send', '把背景换成白色')">把背景换成白色</a-tag>
+          <a-tag class="suggestion" @click="editable && emit('send', '把背景换成白色并整体调亮')">
             把背景换成白色并整体调亮
           </a-tag>
-          <a-tag class="suggestion" @click="emit('send', '出一套 1:1、4:5、9:16 的投放尺寸')">
+          <a-tag class="suggestion" @click="editable && emit('send', '出一套 1:1、4:5、9:16 的投放尺寸')">
             出投放尺寸
           </a-tag>
         </div>
@@ -25,6 +25,7 @@
               v-if="msg.run"
               :run="msg.run"
               :acting="actingRunId === msg.run.id"
+              :editable="editable"
               @confirm="(id) => emit('confirm', id)"
               @cancel="(id) => emit('cancel', id)"
               @retry="(id) => emit('retry', id)"

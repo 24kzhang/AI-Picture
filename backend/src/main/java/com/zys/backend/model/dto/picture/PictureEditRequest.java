@@ -14,6 +14,7 @@ public class PictureEditRequest {
      * id
      */
     private Long id;
+    private Long expectedEditVersion;
 
     /**
      * 图片名称

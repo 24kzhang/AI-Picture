@@ -10,6 +10,7 @@ public class PictureUploadRequest {
      * 图片 id ，用于修改
      */
     private Long id;
+    private Long expectedEditVersion;
 
     /**
      * 图片文件 url ，用于上传

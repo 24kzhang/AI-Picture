@@ -41,6 +41,9 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 @Service
 public class ToolRunService {
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private PictureCollaborationService collaboration;
 
     private static final String CANCEL_INTENT_PREFIX = "gallery:agent:cancel-intent:";
 
@@ -140,8 +143,10 @@ public class ToolRunService {
             params = toolRegistry.validateParams(run.getTool(), params);
             injectHiddenParams(run, spec, params);
             ToolRunContext context = buildContext(run);
+            Integer inputRevision = context.getSession() == null ? null : context.getSession().getRevision();
+            if (context.getSession() != null) collaboration.checkToolStart(run, context.getSession());
             AgentToolHandler handler = spec.getHandler();
-            Map<String, Object> result = handler.handle(context, params);
+            Map<String, Object> result = new java.util.HashMap<>(handler.handle(context, params));
             // 结果回写前再次检查取消意图与数据库状态
             if (isCancelRequested(run.getId())) {
                 markCanceled(run, "任务已按用户要求取消");
@@ -152,7 +157,7 @@ public class ToolRunService {
                 log.info("任务已被取消，丢弃结果，toolRunId={}", run.getId());
                 return;
             }
-            recordResult(run, result);
+            recordResult(run, result, inputRevision);
             markSucceeded(run, result);
         } catch (AgentToolException e) {
             markFailed(run, e.getMessage());
@@ -262,12 +267,16 @@ public class ToolRunService {
     /**
      * 工具结果回写：画布变更走 LayerDocumentService（revision+1、历史、选区失效）
      */
-    private void recordResult(PictureToolRun run, Map<String, Object> result) {
+    private void recordResult(PictureToolRun run, Map<String, Object> result, Integer inputRevision) {
         if (run.getEditSessionId() == null || result == null) {
             return;
         }
         PictureEditSession session = sessionMapper.selectById(run.getEditSessionId());
         if (session == null) {
+            return;
+        }
+        if (collaboration.shared(session.getId())) {
+            collaboration.applyToolResult(run, inputRevision, result);
             return;
         }
         try {

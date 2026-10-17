@@ -258,6 +258,11 @@ public class PictureEditHandler extends TextWebSocketHandler {
      * 获取当前编辑者，供后加入的观看用户恢复准确状态。
      */
     private UserVO getEditingUser(Long pictureId) {
+        JSONObject lease = editLeaseService.get(pictureId);
+        if (lease != null && AgentConstant.EDIT_LOCK_MODE_AGENT.equals(lease.getStr("mode"))) {
+            User holder = userService.getById(lease.getLong("userId"));
+            return holder == null ? null : userService.getUserVO(holder);
+        }
         Long editingUserId = pictureEditingUsers.get(pictureId);
         if (editingUserId == null) {
             return null;
@@ -284,7 +289,7 @@ public class PictureEditHandler extends TextWebSocketHandler {
         module.addSerializer(Long.TYPE, ToStringSerializer.instance);
         objectMapper.registerModule(module);
         if (session.isOpen()) {
-            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(responseMessage)));
+            synchronized (session) { if (session.isOpen()) session.sendMessage(new TextMessage(objectMapper.writeValueAsString(responseMessage))); }
         }
     }
 
@@ -320,7 +325,7 @@ public class PictureEditHandler extends TextWebSocketHandler {
                     continue;
                 }
                 if (session.isOpen()) {
-                    session.sendMessage(textMessage);
+                    synchronized (session) { if (session.isOpen()) session.sendMessage(textMessage); }
                 }
             }
         }
@@ -334,6 +339,13 @@ public class PictureEditHandler extends TextWebSocketHandler {
      */
     private void broadcastToPicture(Long pictureId, PictureEditResponseMessage pictureEditResponseMessage) throws IOException {
         broadcastToPicture(pictureId, pictureEditResponseMessage, null);
+    }
+    @org.springframework.context.event.EventListener
+    public void onCollaborationChanged(com.zys.backend.agent.model.PictureCollaborationChanged event) {
+        PictureEditResponseMessage response = new PictureEditResponseMessage();
+        response.setType("COLLABORATION_CHANGED");
+        try { broadcastToPicture(event.getPictureId(), response); }
+        catch (IOException e) { log.debug("协同通知失败，客户端将通过快照恢复", e); }
     }
 }
 

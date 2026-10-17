@@ -10,6 +10,8 @@ import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
 import java.util.concurrent.TimeUnit;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import java.util.Collections;
 
 /**
  * QUICK 与 AGENT 统一编辑租约。
@@ -33,8 +35,8 @@ public class EditLeaseService {
         String key = key(pictureId);
         JSONObject lease = new JSONObject()
                 .set("mode", mode)
-                .set("userId", userId)
-                .set("sessionId", sessionId)
+                .set("userId", String.valueOf(userId))
+                .set("sessionId", sessionId == null ? null : String.valueOf(sessionId))
                 .set("acquiredAt", System.currentTimeMillis());
         String value = lease.toString();
         Boolean acquired = stringRedisTemplate.opsForValue()
@@ -44,8 +46,7 @@ public class EditLeaseService {
         }
         JSONObject current = get(pictureId);
         if (current != null && isOwner(current, mode, userId, sessionId)) {
-            renewInternal(key, current);
-            return current;
+            return renewInternal(key, current) ? current : null;
         }
         return null;
     }
@@ -64,8 +65,7 @@ public class EditLeaseService {
         if (!isOwner(current, mode, userId, sessionId)) {
             return false;
         }
-        renewInternal(key, current);
-        return true;
+        return renewInternal(key, current);
     }
 
     /**
@@ -81,14 +81,8 @@ public class EditLeaseService {
             return false;
         }
         // 值仍属于自己才删除，避免误删他人租约
-        String value = stringRedisTemplate.opsForValue().get(key);
-        if (value != null) {
-            JSONObject latest = JSONUtil.parseObj(value);
-            if (isOwner(latest, mode, userId, sessionId)) {
-                stringRedisTemplate.delete(key);
-            }
-        }
-        return true;
+        Long deleted = stringRedisTemplate.execute(new DefaultRedisScript<>("if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end",Long.class),Collections.singletonList(key),current.toString());
+        return Long.valueOf(1).equals(deleted);
     }
 
     /**
@@ -97,11 +91,13 @@ public class EditLeaseService {
     public void forceAcquire(Long pictureId, String mode, Long userId, Long sessionId) {
         JSONObject lease = new JSONObject()
                 .set("mode", mode)
-                .set("userId", userId)
-                .set("sessionId", sessionId)
+                .set("userId", String.valueOf(userId))
+                .set("sessionId", sessionId == null ? null : String.valueOf(sessionId))
                 .set("acquiredAt", System.currentTimeMillis());
-        stringRedisTemplate.opsForValue().set(key(pictureId), lease.toString(),
-                AgentConstant.EDIT_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+        String current=stringRedisTemplate.opsForValue().get(key(pictureId));
+        if(current!=null){JSONObject holder=JSONUtil.parseObj(current);if(!mode.equals(holder.getStr("mode"))||!java.util.Objects.equals(holder.getLong("userId"),userId)||holder.getLong("sessionId")!=null&&!java.util.Objects.equals(holder.getLong("sessionId"),sessionId))throw new com.zys.backend.exception.BusinessException(com.zys.backend.exception.ErrorCode.OPERATION_ERROR,"编辑租约已被其他会话占用");}
+        Long bound=stringRedisTemplate.execute(new DefaultRedisScript<>("local v=redis.call('get',KEYS[1]); if (not v and ARGV[1]=='') or v==ARGV[1] then redis.call('set',KEYS[1],ARGV[2],'EX',ARGV[3]); return 1 else return 0 end",Long.class),Collections.singletonList(key(pictureId)),current==null?"":current,lease.toString(),String.valueOf(AgentConstant.EDIT_LOCK_TTL_SECONDS));
+        if(!Long.valueOf(1).equals(bound))throw new com.zys.backend.exception.BusinessException(com.zys.backend.exception.ErrorCode.OPERATION_ERROR,"编辑租约已改变，请重新获取");
     }
 
     /**
@@ -142,10 +138,11 @@ public class EditLeaseService {
         return leaseSessionId.equals(sessionId);
     }
 
-    private void renewInternal(String key, JSONObject lease) {
+    private boolean renewInternal(String key, JSONObject lease) {
+        String previous=lease.toString();
         lease.set("acquiredAt", System.currentTimeMillis());
-        stringRedisTemplate.opsForValue().set(key, lease.toString(),
-                AgentConstant.EDIT_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+        Long changed=stringRedisTemplate.execute(new DefaultRedisScript<>("if redis.call('get',KEYS[1]) == ARGV[1] then redis.call('set',KEYS[1],ARGV[2],'EX',ARGV[3]); return 1 else return 0 end",Long.class),Collections.singletonList(key),previous,lease.toString(),String.valueOf(AgentConstant.EDIT_LOCK_TTL_SECONDS));
+        return Long.valueOf(1).equals(changed);
     }
 
     public static String key(Long pictureId) {

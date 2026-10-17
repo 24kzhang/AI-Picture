@@ -47,6 +47,8 @@
               <template v-else-if="column.key === 'source'">
                 <a-tag>{{ sourceText(record.source) }}</a-tag>
               </template>
+              <template v-else-if="column.key === 'size'">{{ record.picWidth }} × {{ record.picHeight }}</template>
+              <template v-else-if="column.dataIndex === 'createTime'">{{ record.createTime ? new Date(record.createTime).toLocaleString('zh-CN', { hour12: false }) : '—' }}</template>
               <template v-else-if="column.key === 'action'">
                 <a-popconfirm
                   title="恢复该版本会创建一个新版本，确认继续？"
@@ -100,7 +102,7 @@ const committing = ref(false)
 const restoringId = ref<string>('')
 
 const canCommit = computed(
-  () => !!props.finalAsset && !!props.sessionId && props.expectedEditVersion !== undefined,
+  () => props.canEdit && !!props.finalAsset && !!props.sessionId && props.expectedEditVersion !== undefined,
 )
 
 const columns = [
@@ -129,17 +131,22 @@ async function loadVersions() {
     const res = await listPictureVersions(props.pictureId)
     if (res.data.code === 0) {
       versions.value = res.data.data ?? []
+    } else {
+      message.error(res.data.message || '版本历史读取失败')
     }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '版本历史读取失败')
   } finally {
     loading.value = false
   }
 }
 
 watch(
-  () => props.open,
-  (open) => {
+  () => [props.open, props.pictureId, props.sessionId, props.expectedEditVersion] as const,
+  ([open]) => {
     if (open) loadVersions()
   },
+  { immediate: true },
 )
 
 async function doCommit() {
@@ -158,6 +165,8 @@ async function doCommit() {
     } else {
       message.error(res.data.message || '提交失败')
     }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '提交失败，草稿已保留')
   } finally {
     committing.value = false
   }
@@ -174,6 +183,8 @@ async function doRestore(record: PictureVersionVO) {
     } else {
       message.error(res.data.message || '恢复失败')
     }
+  } catch (error) {
+    message.error(error instanceof Error ? error.message : '恢复失败，请重新查询版本历史')
   } finally {
     restoringId.value = ''
   }

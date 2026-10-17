@@ -68,6 +68,7 @@ class AgentCommitServiceTest {
     @BeforeEach
     void setUp() {
         commitService = new AgentCommitService();
+        ReflectionTestUtils.setField(commitService, "collaboration", mock(com.zys.backend.agent.service.PictureCollaborationService.class));
         pictureMapper = mock(PictureMapper.class);
         versionMapper = mock(PictureVersionMapper.class);
         sessionMapper = mock(PictureEditSessionMapper.class);
@@ -225,6 +226,40 @@ class AgentCommitServiceTest {
         assertEquals(Integer.valueOf(4), version.getVersionNo());
         verify(storageService, never()).storeVersion(anyLong(), anyString(), any());
         verify(pictureMapper, never()).update(any(), any());
+    }
+
+    @Test
+    void sharedCommitStoresCompleteCanvasAndRecordsAcceptedRequest() {
+        stubHappyPath();
+        com.zys.backend.agent.service.PictureCollaborationService collaboration =
+                (com.zys.backend.agent.service.PictureCollaborationService) ReflectionTestUtils.getField(commitService, "collaboration");
+        com.zys.backend.agent.service.LayerDocumentService documents = mock(com.zys.backend.agent.service.LayerDocumentService.class);
+        ReflectionTestUtils.setField(commitService, "documentService", documents);
+        when(collaboration.shared(9L)).thenReturn(true);
+        PictureEditSession session = activeSession();
+        session.setCurrentAssetId(500L);
+        byte[] flattened = new byte[]{9, 8, 7};
+        when(documents.currentCanvasBytes(session)).thenReturn(flattened);
+        commitService.commit(session, 500L, 3L, user);
+        verify(storageService).storeVersion(100L, "png", flattened);
+        verify(assetService, never()).loadBytes(any());
+        verify(collaboration).lockEditor(session, user);
+        verify(collaboration).recordCommit(session, user, 500L, 3L);
+    }
+
+    @Test
+    void sharedCommittedReplayRequiresOriginalAcceptedRequest() {
+        com.zys.backend.agent.service.PictureCollaborationService collaboration =
+                (com.zys.backend.agent.service.PictureCollaborationService) ReflectionTestUtils.getField(commitService, "collaboration");
+        when(collaboration.shared(9L)).thenReturn(true);
+        PictureEditSession session = activeSession();
+        session.setStatus(EditSessionStatusEnum.COMMITTED.getValue());
+        session.setCommittedVersionId(66L);
+        PictureVersion existing = new PictureVersion(); existing.setId(66L);
+        when(versionMapper.selectById(66L)).thenReturn(existing);
+        commitService.commit(session, 500L, 3L, user);
+        verify(collaboration).requireCommitReplay(session, user, 500L, 3L);
+        verify(storageService, never()).storeVersion(anyLong(), anyString(), any());
     }
 
     @Test

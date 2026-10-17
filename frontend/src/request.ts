@@ -1,8 +1,12 @@
 import axios from 'axios'
 import { message } from 'ant-design-vue'
 
+const configuredOrigin = import.meta.env.VITE_API_BASE_URL ?? ''
+// Local development uses the same-origin proxy, including its login cookie.
+// This also permits isolated localhost / 127.0.0.1 collaboration sessions.
+const localDevelopment = import.meta.env.DEV && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/?$/.test(configuredOrigin)
 const service = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080',
+  baseURL: localDevelopment ? '' : configuredOrigin,
   timeout: 120000,
   withCredentials: true,
 })
@@ -18,7 +22,7 @@ const normalizePictureUrls = (value: unknown, field?: string): unknown => {
   if (value instanceof Blob || value instanceof ArrayBuffer) return value
   if (typeof value === 'string' && field && pictureUrlFields.has(field) && value.includes('/api/files/')) {
     try {
-      const currentApiOrigin = new URL(service.defaults.baseURL ?? window.location.origin, window.location.origin).origin
+      const currentApiOrigin = new URL(service.defaults.baseURL || window.location.origin, window.location.origin).origin
       const parsed = new URL(value, window.location.origin)
       if (parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1') {
         return `${currentApiOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`

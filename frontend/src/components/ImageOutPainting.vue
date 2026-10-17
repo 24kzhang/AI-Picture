@@ -53,6 +53,7 @@ const resultImageUrl = ref<string>('')
 // 任务 id
 const taskId = ref<string>()
 const submitting = ref(false)
+const inputVersion = ref(0)
 
 /**
  * 创建任务
@@ -62,6 +63,7 @@ const createTask = async () => {
     return
   }
   submitting.value = true
+  inputVersion.value = props.picture.editVersion ?? 0
   resultImageUrl.value = ''
   try {
     const res = await createPictureOutPaintingTaskUsingPost({
@@ -138,6 +140,7 @@ const uploadLoading = ref(false)
  * @param file
  */
 const handleUpload = async () => {
+  if (uploadLoading.value) return
   uploadLoading.value = true
   try {
     const params: API.PictureUploadRequest = {
@@ -146,6 +149,7 @@ const handleUpload = async () => {
     }
     if (props.picture) {
       params.id = props.picture.id
+      params.expectedEditVersion = inputVersion.value
     }
     const res = await uploadPictureByUrlUsingPost(params)
     if (res.data.code === 0 && res.data.data) {

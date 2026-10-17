@@ -36,9 +36,10 @@ interface Props {
  * * @param file
  */
 const handleUpload = async ({ file }: any) => {
+  if (loading.value) return
   loading.value = true
   try {
-    const params:API.PictureUploadRequest = props.picture ? { id: props.picture.id } : {}
+    const params:API.PictureUploadRequest = props.picture ? { id: props.picture.id, expectedEditVersion: props.picture.editVersion ?? 0 } : {}
     params.spaceId = props.spaceId
 
     const res = await uploadPictureUsingPost(params, {}, file)

@@ -202,7 +202,7 @@ public class AgentSessionController {
                                                  @RequestBody AgentCommitRequest commitRequest,
                                                  HttpServletRequest request) {
         User loginUser = userService.getLoginUser(request);
-        PictureEditSession session = agentSessionService.requireSession(sessionId, loginUser, true);
+        PictureEditSession session = agentSessionService.requireCommitSession(sessionId, loginUser);
         PictureVersionVO version = agentCommitService.commit(session,
                 commitRequest == null ? null : commitRequest.getFinalAssetId(),
                 commitRequest == null ? null : commitRequest.getExpectedEditVersion(),

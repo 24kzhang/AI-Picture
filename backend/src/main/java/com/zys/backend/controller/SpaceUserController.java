@@ -35,6 +35,8 @@ import java.util.List;
 @RequestMapping("/spaceUser")
 @Slf4j
 public class SpaceUserController {
+    @Resource private com.zys.backend.service.MutationGuard mutationGuard;
+    @Resource private com.zys.backend.service.SpaceService spaces;
 
     @Resource
     private SpaceUserService spaceUserService;
@@ -57,6 +59,7 @@ public class SpaceUserController {
      * 从空间移除成员
      */
     @PostMapping("/delete")
+    @org.springframework.transaction.annotation.Transactional
     @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.SPACE_USER_MANAGE)
     public BaseResponse<Boolean> deleteSpaceUser(@RequestBody DeleteRequest deleteRequest, HttpServletRequest request) {
         if (deleteRequest == null || deleteRequest.getId() <= 0) {
@@ -66,9 +69,12 @@ public class SpaceUserController {
         // 判断是否存在
         SpaceUser oldSpaceUser = spaceUserService.getById(id);
         ThrowUtils.throwIf(oldSpaceUser == null, ErrorCode.NOT_FOUND_ERROR);
+        mutationGuard.lockSpace(oldSpaceUser.getSpaceId());
+        ThrowUtils.throwIf(oldSpaceUser.getUserId().equals(spaces.getById(oldSpaceUser.getSpaceId()).getUserId()),ErrorCode.OPERATION_ERROR,"不能移除空间创建者");
+        mutationGuard.requireVersion(deleteRequest.getExpectedMutationVersion());
         // 操作数据库
-        boolean result = spaceUserService.removeById(id);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        boolean result = spaceUserService.remove(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<SpaceUser>().eq("id",id).eq("mutationVersion",deleteRequest.getExpectedMutationVersion()));
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"成员已被修改或移除，请刷新后重新确认");
         return ResultUtils.success(true);
     }
 
@@ -107,6 +113,7 @@ public class SpaceUserController {
      * 编辑成员信息（设置权限）
      */
     @PostMapping("/edit")
+    @org.springframework.transaction.annotation.Transactional
     @SaSpaceCheckPermission(value = SpaceUserPermissionConstant.SPACE_USER_MANAGE)
     public BaseResponse<Boolean> editSpaceUser(@RequestBody SpaceUserEditRequest spaceUserEditRequest,
                                                HttpServletRequest request) {
@@ -122,9 +129,13 @@ public class SpaceUserController {
         long id = spaceUserEditRequest.getId();
         SpaceUser oldSpaceUser = spaceUserService.getById(id);
         ThrowUtils.throwIf(oldSpaceUser == null, ErrorCode.NOT_FOUND_ERROR);
+        mutationGuard.lockSpace(oldSpaceUser.getSpaceId());
+        ThrowUtils.throwIf(oldSpaceUser.getUserId().equals(spaces.getById(oldSpaceUser.getSpaceId()).getUserId())&&!"admin".equals(spaceUser.getSpaceRole()),ErrorCode.OPERATION_ERROR,"不能降低空间创建者权限");
+        Long expected=spaceUserEditRequest.getExpectedMutationVersion();mutationGuard.requireVersion(expected);
+        spaceUser.setMutationVersion(expected+1);
         // 操作数据库
-        boolean result = spaceUserService.updateById(spaceUser);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        boolean result = spaceUserService.update(spaceUser,new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SpaceUser>().eq("id",id).eq("mutationVersion",expected));
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"成员权限已被修改或成员已移除，请刷新后重新确认");
         return ResultUtils.success(true);
     }
 

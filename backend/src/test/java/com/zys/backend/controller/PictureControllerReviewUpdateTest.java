@@ -30,13 +30,15 @@ class PictureControllerReviewUpdateTest {
             new PictureServiceImpl().fillReviewParams(call.getArgument(0), call.getArgument(1));
             return null;
         }).when(pictures).fillReviewParams(any(Picture.class), eq(admin));
-        when(pictures.updateById(any(Picture.class))).thenReturn(true);
+        when(pictures.update(any(Picture.class), any())).thenReturn(true);
         PictureUpdateRequest input = new PictureUpdateRequest(); input.setId(1L); input.setName("咖啡豆商品图");
+        input.setExpectedEditVersion(0L);
 
         assertTrue(controller.updatePicture(input, request).getData());
 
         ArgumentCaptor<Picture> saved = ArgumentCaptor.forClass(Picture.class);
-        verify(pictures).updateById(saved.capture());
+        verify(pictures).update(saved.capture(), any());
+        assertEquals(1L, saved.getValue().getEditVersion());
         assertEquals(1L, saved.getValue().getId());
         assertEquals("咖啡豆商品图", saved.getValue().getName());
         assertEquals(0, saved.getValue().getReviewStatus());

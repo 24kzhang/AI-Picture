@@ -192,6 +192,8 @@ declare namespace API {
   }
 
   type DeleteRequest = {
+    expectedEditVersion?: number;
+    expectedMutationVersion?: number;
     id?: string
   }
 
@@ -330,6 +332,7 @@ declare namespace API {
   }
 
   type Picture = {
+    editVersion?: number;
     category?: string
     createTime?: string
     editTime?: string
@@ -356,6 +359,7 @@ declare namespace API {
   }
 
   type PictureEditByBatchRequest = {
+    expectedVersions?: Record<string, number>;
     category?: string
     nameRule?: string
     pictureIdList?: string[]
@@ -364,6 +368,7 @@ declare namespace API {
   }
 
   type PictureEditRequest = {
+    expectedEditVersion?: number;
     category?: string
     id?: string
     introduction?: string
@@ -399,6 +404,7 @@ declare namespace API {
   }
 
   type PictureReviewRequest = {
+    expectedEditVersion?: number;
     id?: string
     reviewMessage?: string
     reviewStatus?: number
@@ -410,6 +416,7 @@ declare namespace API {
   }
 
   type PictureUpdateRequest = {
+    expectedEditVersion?: number;
     category?: string
     id?: string
     introduction?: string
@@ -424,6 +431,7 @@ declare namespace API {
   }
 
   type PictureUploadRequest = {
+    expectedEditVersion?: number;
     fileUrl?: string
     id?: string
     picName?: string
@@ -431,6 +439,7 @@ declare namespace API {
   }
 
   type PictureVO = {
+    editVersion?: number;
     category?: string
     createTime?: string
     editTime?: string
@@ -465,6 +474,7 @@ declare namespace API {
   }
 
   type Space = {
+    mutationVersion?: number;
     createTime?: string
     editTime?: string
     id?: string
@@ -499,6 +509,7 @@ declare namespace API {
   }
 
   type SpaceEditRequest = {
+    expectedMutationVersion?: number;
     id?: string
     spaceName?: string
   }
@@ -549,6 +560,7 @@ declare namespace API {
   }
 
   type SpaceUpdateRequest = {
+    expectedMutationVersion?: number;
     id?: string
     maxCount?: number
     maxSize?: number
@@ -572,6 +584,7 @@ declare namespace API {
   }
 
   type SpaceUser = {
+    mutationVersion?: number;
     createTime?: string
     id?: string
     spaceId?: string
@@ -600,6 +613,7 @@ declare namespace API {
   }
 
   type SpaceUserEditRequest = {
+    expectedMutationVersion?: number;
     id?: string
     spaceRole?: string
   }
@@ -612,6 +626,7 @@ declare namespace API {
   }
 
   type SpaceUserVO = {
+    mutationVersion?: number;
     createTime?: string
     id?: string
     space?: SpaceVO
@@ -623,6 +638,7 @@ declare namespace API {
   }
 
   type SpaceVO = {
+    mutationVersion?: number;
     createTime?: string
     editTime?: string
     id?: string

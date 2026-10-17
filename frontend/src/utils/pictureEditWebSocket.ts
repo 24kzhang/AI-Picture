@@ -1,7 +1,11 @@
+import { request } from '@/request'
+
 export default class PictureEditWebSocket {
   private pictureId: string
   private socket: WebSocket | null
   private eventHandlers: any
+  private stopped = false
+  private reconnectTimer?: number
 
   constructor(pictureId: string) {
     this.pictureId = pictureId // 当前编辑的图片 ID
@@ -13,7 +17,9 @@ export default class PictureEditWebSocket {
    * 初始化 WebSocket 连接
    */
   connect() {
-    const backendBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080'
+    this.stopped = false
+    window.clearTimeout(this.reconnectTimer)
+    const backendBaseUrl = request.defaults.baseURL || window.location.origin
     const DEV_BASE_URL = backendBaseUrl.replace(/^http/, 'ws').replace(/\/$/, '')
 
     // 线上地址
@@ -44,6 +50,7 @@ export default class PictureEditWebSocket {
     this.socket.onclose = (event) => {
       console.log('WebSocket 连接已关闭:', event)
       this.triggerEvent('close', event)
+      if (!this.stopped) this.reconnectTimer = window.setTimeout(() => this.connect(), 2000)
     }
 
     // 监听错误事件
@@ -57,6 +64,8 @@ export default class PictureEditWebSocket {
    * 关闭 WebSocket 连接
    */
   disconnect() {
+    this.stopped = true
+    window.clearTimeout(this.reconnectTimer)
     if (this.socket) {
       this.socket.close()
       console.log('WebSocket 连接已手动关闭')

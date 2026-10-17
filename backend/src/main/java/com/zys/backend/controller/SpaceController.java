@@ -36,6 +36,7 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/space")
 public class SpaceController {
+    @Resource private com.zys.backend.service.MutationGuard mutationGuard;
 
     @Resource
     private UserService userService;
@@ -70,15 +71,21 @@ public class SpaceController {
      * @return
      */
     @PostMapping("/delete")
+    @org.springframework.transaction.annotation.Transactional
     public BaseResponse<Boolean> deleteSpace(@RequestBody DeleteRequest deleteRequest, HttpServletRequest request) {
         if (deleteRequest == null || deleteRequest.getId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         User loginUser = userService.getLoginUser(request);
         Long id = deleteRequest.getId();
+        mutationGuard.lockSpace(id);
+        mutationGuard.requireEmptySpace(id);
         // 判断是否存在
         Space oldSpace = spaceService.getById(id);
         ThrowUtils.throwIf(oldSpace == null, ErrorCode.NOT_FOUND_ERROR);
+        mutationGuard.requireVersion(deleteRequest.getExpectedMutationVersion());
+        ThrowUtils.throwIf(!java.util.Objects.equals(oldSpace.getMutationVersion(), deleteRequest.getExpectedMutationVersion()),
+                ErrorCode.OPERATION_ERROR, "空间已被修改，请刷新后重新确认删除");
         // 仅本人或者管理员可删除
         spaceService.checkSpaceAuth(loginUser, oldSpace);
         // 操作数据库
@@ -113,8 +120,12 @@ public class SpaceController {
         Space oldSpace = spaceService.getById(id);
         ThrowUtils.throwIf(oldSpace == null, ErrorCode.NOT_FOUND_ERROR);
         // 操作数据库
-        boolean result = spaceService.updateById(space);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        Long expected = spaceUpdateRequest.getExpectedMutationVersion();
+        mutationGuard.requireVersion(expected);
+        space.setMutationVersion(expected+1);
+        boolean result = spaceService.update(space,new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Space>()
+            .eq("id",id).eq("mutationVersion",expected).le("totalSize",space.getMaxSize()).le("totalCount",space.getMaxCount()));
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"空间已更新、已删除或新配额低于用量，请刷新后重新确认");
         return ResultUtils.success(true);
     }
 
@@ -207,8 +218,12 @@ public class SpaceController {
         // 仅本人或管理员可编辑
         spaceService.checkSpaceAuth(loginUser, oldSpace);
         // 操作数据库
-        boolean result = spaceService.updateById(space);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        Long expected = spaceEditRequest.getExpectedMutationVersion();
+        mutationGuard.requireVersion(expected);
+        space.setMutationVersion(expected+1);
+        boolean result = spaceService.update(space,new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Space>()
+            .eq("id",id).eq("mutationVersion",expected));
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"空间已被更新或删除，请刷新后重新确认");
         return ResultUtils.success(true);
     }
 

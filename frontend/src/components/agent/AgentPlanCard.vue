@@ -23,6 +23,12 @@
           {{ toolRunOf(step)?.stage }}
         </div>
         <a-alert
+          v-if="toolRunOf(step)?.result?.pending"
+          type="info"
+          show-icon
+          :message="String(toolRunOf(step)?.result?.pendingReason || '结果已保留在资产墙，尚未应用到画布')"
+        />
+        <a-alert
           v-if="toolRunOf(step)?.errorMessage"
           type="error"
           show-icon
@@ -38,20 +44,20 @@
 
     <div class="plan-actions">
       <template v-if="run.status === 'waiting'">
-        <a-button type="primary" size="small" :loading="acting" @click="emit('confirm', run.id)">
+        <a-button type="primary" size="small" :disabled="!editable" :loading="acting" @click="emit('confirm', run.id)">
           确认执行
         </a-button>
-        <a-button size="small" danger :disabled="acting" @click="emit('cancel', run.id)">
+        <a-button size="small" danger :disabled="acting || !editable" @click="emit('cancel', run.id)">
           取消
         </a-button>
       </template>
       <template v-else-if="run.status === 'running' || run.status === 'planning'">
-        <a-button size="small" danger :disabled="acting" @click="emit('cancel', run.id)">
+        <a-button size="small" danger :disabled="acting || !editable" @click="emit('cancel', run.id)">
           取消执行
         </a-button>
       </template>
       <template v-else-if="run.status === 'failed' || run.status === 'canceled'">
-        <a-button size="small" :loading="acting" @click="emit('retry', run.id)">重试</a-button>
+        <a-button size="small" :disabled="!editable" :loading="acting" @click="emit('retry', run.id)">重试</a-button>
       </template>
     </div>
   </div>
@@ -64,6 +70,7 @@ import type { AgentRunVO, AgentToolRunVO, PlanStep } from '@/api/agentController
 const props = defineProps<{
   run: AgentRunVO
   acting?: boolean
+  editable: boolean
 }>()
 
 const emit = defineEmits<{

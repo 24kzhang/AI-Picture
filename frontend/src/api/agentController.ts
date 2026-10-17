@@ -1,4 +1,29 @@
 import { request } from '@/request'
+import type { AxiosRequestConfig } from 'axios'
+
+export interface PictureCollaborationContext { clientId: string; epoch: number; expectedRevision: number }
+export interface PictureCollaborationLease { editorId?: string; editorName?: string; clientId?: string; epoch: number; until: number; serverTime: number }
+const collaborationContexts = new Map<string, PictureCollaborationContext>()
+const runSessions = new Map<string, string>()
+const pictureSessions = new Map<string, string>()
+export function setPictureCollaborationContext(session: AgentSessionVO, context: PictureCollaborationContext) {
+  collaborationContexts.set(String(session.id), context)
+  pictureSessions.set(String(session.pictureId), String(session.id))
+  for (const run of session.runs) runSessions.set(String(run.id), String(session.id))
+}
+export function clearPictureCollaborationContext(sessionId: string) { collaborationContexts.delete(sessionId) }
+async function agentRequest<T>(url: string, config: AxiosRequestConfig) {
+  const sessionMatch = url.match(/agent-sessions\/([^/]+)/)
+  const runMatch = url.match(/agent-runs\/([^/]+)/)
+  const pictureMatch = url.match(/picture\/([^/]+)\/versions/)
+  const sessionId = sessionMatch?.[1] ?? (runMatch ? runSessions.get(runMatch[1]) : pictureMatch ? pictureSessions.get(pictureMatch[1]) : undefined)
+  const context = sessionId ? collaborationContexts.get(sessionId) : undefined
+  if (context) config = { ...config, headers: { ...config.headers, 'X-Picture-Collaboration': JSON.stringify(context) } }
+  const response = await request<T>(url, config)
+  const run = (response.data as AgentResponse<AgentRunVO>).data
+  if (run?.editSessionId && run?.id) runSessions.set(String(run.id), String(run.editSessionId))
+  return response
+}
 
 /** 后端 BaseResponse 泛型（避免 any） */
 export interface AgentResponse<T> {
@@ -96,6 +121,7 @@ export interface AgentToolVO {
 }
 
 export interface AgentSessionVO {
+  collaboration?: PictureCollaborationLease
   id: string
   pictureId: string
   spaceId?: string
@@ -149,17 +175,17 @@ export interface PrepareSelectionResult {
 
 /** 创建或复用 Agent 编辑会话 POST /api/picture/{pictureId}/agent-sessions */
 export async function createAgentSession(pictureId: string | number) {
-  return request<AgentResponse<AgentSessionVO>>(`/api/picture/${pictureId}/agent-sessions`, { method: 'POST' })
+  return agentRequest<AgentResponse<AgentSessionVO>>(`/api/picture/${pictureId}/agent-sessions`, { method: 'POST' })
 }
 
 /** 会话快照 GET /api/agent-sessions/{sessionId} */
 export async function getAgentSession(sessionId: string | number) {
-  return request<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}`, { method: 'GET' })
+  return agentRequest<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}`, { method: 'GET' })
 }
 
 /** 发送自然语言指令 POST /api/agent-sessions/{sessionId}/messages */
 export async function sendAgentMessage(sessionId: string | number, message: string) {
-  return request<AgentResponse<AgentRunVO>>(`/api/agent-sessions/${sessionId}/messages`, {
+  return agentRequest<AgentResponse<AgentRunVO>>(`/api/agent-sessions/${sessionId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     data: { message },
@@ -172,7 +198,7 @@ export async function submitAgentTool(
   tool: string,
   params: Record<string, unknown>,
 ) {
-  return request<AgentResponse<AgentRunVO>>(`/api/agent-sessions/${sessionId}/tools`, {
+  return agentRequest<AgentResponse<AgentRunVO>>(`/api/agent-sessions/${sessionId}/tools`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     data: { tool, params },
@@ -184,24 +210,24 @@ export async function submitAgentTool(
 // region 运行
 
 export async function confirmAgentRun(runId: string | number) {
-  return request<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}/confirm`, { method: 'POST' })
+  return agentRequest<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}/confirm`, { method: 'POST' })
 }
 
 export async function cancelAgentRun(runId: string | number) {
-  return request<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}/cancel`, { method: 'POST' })
+  return agentRequest<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}/cancel`, { method: 'POST' })
 }
 
 export async function retryAgentRun(runId: string | number) {
-  return request<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}/retry`, { method: 'POST' })
+  return agentRequest<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}/retry`, { method: 'POST' })
 }
 
 export async function getAgentRun(runId: string | number) {
-  return request<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}`, { method: 'GET' })
+  return agentRequest<AgentResponse<AgentRunVO>>(`/api/agent-runs/${runId}`, { method: 'GET' })
 }
 
 /** SSE 事件流地址（EventSource 使用） */
 export function agentRunEventsUrl(runId: string | number) {
-  const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
+  const base = request.defaults.baseURL ?? window.location.origin
   return `${base}/api/agent-runs/${runId}/events`
 }
 
@@ -212,7 +238,7 @@ export function agentRunEventsUrl(runId: string | number) {
 export async function prepareAgentSelection(sessionId: string | number, maskBlob: Blob) {
   const formData = new FormData()
   formData.append('mask', maskBlob, 'mask.png')
-  return request<AgentResponse<PrepareSelectionResult>>(`/api/agent-sessions/${sessionId}/selection/prepare`, {
+  return agentRequest<AgentResponse<PrepareSelectionResult>>(`/api/agent-sessions/${sessionId}/selection/prepare`, {
     method: 'POST',
     data: formData,
   })
@@ -222,7 +248,7 @@ export async function saveAgentSelection(
   sessionId: string | number,
   data: { maskAssetId?: string; markers?: unknown[]; revision?: number },
 ) {
-  return request<AgentResponse<boolean>>(`/api/agent-sessions/${sessionId}/selection`, {
+  return agentRequest<AgentResponse<boolean>>(`/api/agent-sessions/${sessionId}/selection`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     data,
@@ -230,29 +256,29 @@ export async function saveAgentSelection(
 }
 
 export async function getAgentSelection(sessionId: string | number) {
-  return request<AgentResponse<Record<string, unknown> | null>>(`/api/agent-sessions/${sessionId}/selection`, { method: 'GET' })
+  return agentRequest<AgentResponse<Record<string, unknown> | null>>(`/api/agent-sessions/${sessionId}/selection`, { method: 'GET' })
 }
 
 export async function clearAgentSelection(sessionId: string | number) {
-  return request<AgentResponse<boolean>>(`/api/agent-sessions/${sessionId}/selection`, { method: 'DELETE' })
+  return agentRequest<AgentResponse<boolean>>(`/api/agent-sessions/${sessionId}/selection`, { method: 'DELETE' })
 }
 
 export async function undoAgentSession(sessionId: string | number) {
-  return request<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/undo`, { method: 'POST' })
+  return agentRequest<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/undo`, { method: 'POST' })
 }
 
 export async function redoAgentSession(sessionId: string | number) {
-  return request<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/redo`, { method: 'POST' })
+  return agentRequest<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/redo`, { method: 'POST' })
 }
 
 export async function adoptAgentAsset(sessionId: string | number, assetId: string | number) {
-  return request<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/assets/${assetId}/adopt`, {
+  return agentRequest<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/assets/${assetId}/adopt`, {
     method: 'POST',
   })
 }
 
 export async function setAgentFinalAsset(sessionId: string | number, assetId: string | number) {
-  return request<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/final-asset`, {
+  return agentRequest<AgentResponse<AgentSessionVO>>(`/api/agent-sessions/${sessionId}/final-asset`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     data: { assetId },
@@ -264,11 +290,11 @@ export async function setAgentFinalAsset(sessionId: string | number, assetId: st
 // region 租约
 
 export async function renewAgentLease(sessionId: string | number) {
-  return request<AgentResponse<Record<string, unknown>>>(`/api/agent-sessions/${sessionId}/lease/renew`, { method: 'POST' })
+  return agentRequest<AgentResponse<Record<string, unknown>>>(`/api/agent-sessions/${sessionId}/lease/renew`, { method: 'POST' })
 }
 
 export async function releaseAgentLease(sessionId: string | number) {
-  return request<AgentResponse<boolean>>(`/api/agent-sessions/${sessionId}/lease/release`, { method: 'POST' })
+  return agentRequest<AgentResponse<boolean>>(`/api/agent-sessions/${sessionId}/lease/release`, { method: 'POST' })
 }
 
 // endregion
@@ -280,7 +306,7 @@ export async function commitAgentSession(
   finalAssetId: string | number,
   expectedEditVersion: string | number,
 ) {
-  return request<AgentResponse<PictureVersionVO>>(`/api/agent-sessions/${sessionId}/commit`, {
+  return agentRequest<AgentResponse<PictureVersionVO>>(`/api/agent-sessions/${sessionId}/commit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     data: { finalAssetId, expectedEditVersion },
@@ -288,7 +314,7 @@ export async function commitAgentSession(
 }
 
 export async function listPictureVersions(pictureId: string | number) {
-  return request<AgentResponse<PictureVersionVO[]>>(`/api/picture/${pictureId}/versions`, { method: 'GET' })
+  return agentRequest<AgentResponse<PictureVersionVO[]>>(`/api/picture/${pictureId}/versions`, { method: 'GET' })
 }
 
 export async function restorePictureVersion(
@@ -296,7 +322,7 @@ export async function restorePictureVersion(
   versionId: string | number,
   expectedEditVersion: string | number,
 ) {
-  return request<AgentResponse<PictureVersionVO>>(`/api/picture/${pictureId}/versions/${versionId}/restore`, {
+  return agentRequest<AgentResponse<PictureVersionVO>>(`/api/picture/${pictureId}/versions/${versionId}/restore`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     data: { expectedEditVersion },
@@ -305,7 +331,7 @@ export async function restorePictureVersion(
 
 /** 导出资产 ZIP（直接触发浏览器下载） */
 export async function exportAgentZip(sessionId: string | number, kind = 'delivery') {
-  const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
+  const base = request.defaults.baseURL ?? window.location.origin
   const response = await fetch(
     `${base}/api/agent-sessions/${sessionId}/export/zip?kind=${encodeURIComponent(kind)}`,
     { method: 'POST', credentials: 'include' },
@@ -323,7 +349,7 @@ export async function exportAgentZip(sessionId: string | number, kind = 'deliver
 }
 
 export async function getAgentTools() {
-  return request<AgentResponse<AgentToolVO[]>>(`/api/agent/tools`, { method: 'GET' })
+  return agentRequest<AgentResponse<AgentToolVO[]>>(`/api/agent/tools`, { method: 'GET' })
 }
 
 // endregion

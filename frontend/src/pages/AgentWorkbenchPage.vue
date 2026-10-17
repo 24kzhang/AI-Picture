@@ -1,17 +1,17 @@
 <template>
-  <div id="agentWorkbenchPage">
+  <div id="agentWorkbenchPage" :class="{ embedded }">
     <a-spin :spinning="initializing" tip="正在打开 Agent 工作台...">
       <template v-if="session">
         <div class="workbench-header">
           <a-space>
-            <a-button size="small" @click="goBack">返回详情</a-button>
+            <a-button size="small" @click="goBack">{{ embedded ? '返回手动画布' : '返回详情' }}</a-button>
             <span class="session-title">Agent 精修 · 图片 #{{ pictureId }}</span>
             <a-tag :color="statusColor">{{ statusText }}</a-tag>
             <a-tag v-if="session.lease" color="blue">
               编辑租约：{{ session.lease.mode === 'AGENT' ? 'Agent 精修' : '快捷编辑' }}
             </a-tag>
             <a-tag>revision {{ session.revision }}</a-tag>
-            <a-button v-if="session.selection" size="small" @click="clearSelection">
+            <a-button v-if="session.selection" size="small" :disabled="!editable" @click="clearSelection">
               清除选区
             </a-button>
           </a-space>
@@ -22,7 +22,7 @@
             <a-button size="small" :disabled="!editable || !session.canRedo" @click="doRedo">
               重做
             </a-button>
-            <a-button size="small" :disabled="!editable" @click="versionOpen = true">
+            <a-button size="small" @click="versionOpen = true">
               版本管理
             </a-button>
             <a-button size="small" type="primary" :disabled="!editable" @click="versionOpen = true">
@@ -202,7 +202,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { useRouter } from 'vue-router'
 import AgentCanvas, {
@@ -213,6 +213,7 @@ import AgentChatPanel, { type ChatMessage } from '@/components/agent/AgentChatPa
 import AgentLayerPanel from '@/components/agent/AgentLayerPanel.vue'
 import AgentAssetWall from '@/components/agent/AgentAssetWall.vue'
 import AgentVersionDialog from '@/components/agent/AgentVersionDialog.vue'
+import { acceptsPictureSnapshot } from '@/utils/pictureCollaboration'
 import {
   adoptAgentAsset,
   agentRunEventsUrl,
@@ -240,7 +241,8 @@ import {
   type ParamField,
 } from '@/api/agentController'
 
-const props = defineProps<{ pictureId: string }>()
+const props = defineProps<{ pictureId: string; embedded?: boolean; sharedSession?: AgentSessionVO; canWrite?: boolean }>()
+const emit = defineEmits<{ updated: [snapshot: AgentSessionVO]; committed: []; back: [] }>()
 
 const router = useRouter()
 
@@ -262,7 +264,7 @@ const runPollTimers = new Map<string, number>()
 const unavailableTools = new Set(['split_layers', 'promote_object_to_layer'])
 let leaseTimer: number | undefined
 
-const editable = computed(() => session.value?.status === 'active')
+const editable = computed(() => session.value?.status === 'active' && (!props.embedded || props.canWrite === true))
 const running = computed(() =>
   messages.value.some(
     (msg) => msg.run && ['planning', 'waiting', 'running'].includes(msg.run.status),
@@ -273,7 +275,7 @@ const selectionRevision = computed<number | undefined>(() => {
   return value === undefined || value === null ? undefined : Number(value)
 })
 const finalAsset = computed(() =>
-  (session.value?.assets ?? []).find((item) => String(item.id) === String(session.value?.finalAssetId ?? '')) ?? null,
+  (session.value?.assets ?? []).find((item) => String(item.id) === String(session.value?.finalAssetId ?? (props.embedded ? session.value?.currentAssetId : '') ?? '')) ?? null,
 )
 
 const statusText = computed(() => {
@@ -301,12 +303,20 @@ const statusColor = computed(() =>
 async function init() {
   initializing.value = true
   try {
+    if (props.embedded) {
+      if (props.sharedSession) applySession(props.sharedSession, false)
+      return
+    }
     const res = await createAgentSession(props.pictureId)
     if (res.data.code !== 0) {
       message.error(res.data.message || '创建 Agent 会话失败')
       return
     }
     applySession(res.data.data)
+    if (res.data.data.collaboration) {
+      await router.replace(`/picture/${props.pictureId}?collaborate=agent`)
+      return
+    }
     leaseTimer = window.setInterval(doRenewLease, 20000)
     // 恢复仍在进行中的运行的 SSE 订阅
     for (const run of session.value?.runs ?? []) {
@@ -321,10 +331,14 @@ async function init() {
   }
 }
 
-function applySession(data: AgentSessionVO) {
+function applySession(data: AgentSessionVO, notify = true) {
+  if (props.embedded && (!acceptsPictureSnapshot(session.value, data) || !acceptsPictureSnapshot(props.sharedSession, data))) return
   session.value = data
   rebuildMessages()
+  if (props.embedded && notify) emit('updated', data)
+  for (const run of data.runs) if (['planning', 'waiting', 'running'].includes(run.status)) subscribeRun(run.id)
 }
+watch(() => props.sharedSession, (data) => { if (props.embedded && data) applySession(data, false) })
 
 function rebuildMessages() {
   const list: ChatMessage[] = []
@@ -387,7 +401,7 @@ async function refreshSessionQuiet() {
   if (!session.value) return
   const res = await getAgentSession(session.value.id)
   if (res.data.code === 0) {
-    session.value = res.data.data
+    applySession(res.data.data)
   }
 }
 
@@ -680,13 +694,16 @@ async function doRedo() {
 
 async function onCommitted() {
   await refreshSession()
+  if (props.embedded) emit('committed')
 }
 
 async function onRestored() {
   message.success('版本已恢复，返回详情页查看新图')
+  if (props.embedded) emit('committed')
 }
 
 function goBack() {
+  if (props.embedded) { emit('back'); return }
   router.push(`/picture/${props.pictureId}`)
 }
 
@@ -699,13 +716,17 @@ onBeforeUnmount(() => {
   for (const key of Array.from(runPollTimers.keys())) {
     closeRunStream(key)
   }
-  if (session.value && editable.value) {
+  if (!props.embedded && session.value && editable.value) {
     releaseAgentLease(session.value.id).catch(() => undefined)
   }
 })
 </script>
 
 <style scoped>
+#agentWorkbenchPage.embedded { height: min(690px, calc(100vh - 245px)); min-height: 480px; }
+.embedded .side-panel { width: 185px; }
+.embedded .chat-panel-wrap { width: 310px; }
+.embedded .session-title { display: none; }
 #agentWorkbenchPage {
   height: calc(100vh - 180px);
   min-height: 440px;

@@ -17,6 +17,7 @@ public class SpaceUserVO implements Serializable {
      * id
      */
     private Long id;
+    private Long mutationVersion;
 
     /**
      * 空间 id

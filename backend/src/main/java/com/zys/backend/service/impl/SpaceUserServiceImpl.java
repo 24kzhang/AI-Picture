@@ -40,6 +40,7 @@ import java.util.stream.Collectors;
 */
 @Service
 public class SpaceUserServiceImpl extends ServiceImpl<SpaceUserMapper, SpaceUser> implements SpaceUserService{
+    @Resource private com.zys.backend.service.MutationGuard mutationGuard;
     @Resource
     private UserService userService;
 
@@ -54,12 +55,16 @@ public class SpaceUserServiceImpl extends ServiceImpl<SpaceUserMapper, SpaceUser
      * @return
      */
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public long addSpaceUser(SpaceUserAddRequest spaceUserAddRequest) {
         // 参数校验
         ThrowUtils.throwIf(spaceUserAddRequest == null, ErrorCode.PARAMS_ERROR);
         SpaceUser spaceUser = new SpaceUser();
         BeanUtils.copyProperties(spaceUserAddRequest, spaceUser);
         validSpaceUser(spaceUser, true);
+        mutationGuard.lockSpace(spaceUser.getSpaceId());
+        SpaceUser existing = this.lambdaQuery().eq(SpaceUser::getSpaceId, spaceUser.getSpaceId()).eq(SpaceUser::getUserId, spaceUser.getUserId()).one();
+        if (existing != null) return existing.getId();
         // 数据库操作
         boolean result = this.save(spaceUser);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);

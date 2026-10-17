@@ -167,7 +167,7 @@ public class PictureController {
         if (deleteRequest == null || deleteRequest.getId() <= 0)
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        pictureService.deletePicture(deleteRequest.getId(), loginUser);
+        pictureService.deletePicture(deleteRequest.getId(), loginUser, deleteRequest.getExpectedEditVersion());
         return ResultUtils.success(true);
     }
 
@@ -196,8 +196,12 @@ public class PictureController {
         User loginUser = userService.getLoginUser(request);
         pictureService.fillReviewParams(picture, loginUser);
         // 操作数据库
-        boolean result = pictureService.updateById(picture);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        Long expected = pictureUpdateRequest.getExpectedEditVersion();
+        ThrowUtils.throwIf(expected == null || expected < 0, ErrorCode.PARAMS_ERROR, "缺少图片版本，请刷新后重试");
+        picture.setEditVersion(expected + 1);
+        boolean result = pictureService.update(picture, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
+            .eq("id", id).eq("editVersion", expected));
+        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片已被更新或删除，请刷新后重新确认");
         return ResultUtils.success(true);
     }
 

@@ -61,6 +61,9 @@ public class AgentSessionVO {
      */
     private Map<String, Object> lease;
 
+    /** Shared browser lease, distinct from the session creator identity. */
+    private Map<String, Object> collaboration;
+
     /**
      * 可用工具
      */

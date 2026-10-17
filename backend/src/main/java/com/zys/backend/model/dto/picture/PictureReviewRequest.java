@@ -8,6 +8,7 @@ import lombok.Data;
  */
 @Data
 public class PictureReviewRequest {
+    private Long expectedEditVersion;
 
     /**
      * id

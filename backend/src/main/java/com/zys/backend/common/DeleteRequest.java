@@ -9,6 +9,8 @@ import java.io.Serializable;
  */
 @Data
 public class DeleteRequest implements Serializable {
+    private Long expectedMutationVersion;
+    private Long expectedEditVersion;
     /**
      *  id
      */

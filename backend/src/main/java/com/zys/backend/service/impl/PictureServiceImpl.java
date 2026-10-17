@@ -60,6 +60,10 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> implements PictureService {
+    @Resource private com.zys.backend.service.MutationGuard mutationGuard;
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private com.zys.backend.agent.service.PictureCollaborationService pictureCollaboration;
 
 
     @Resource
@@ -153,6 +157,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         if (pictureId != null){
             oldPicture = this.getById(pictureId);
             ThrowUtils.throwIf(oldPicture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
+            mutationGuard.requireVersion(pictureUploadRequest.getExpectedEditVersion());
+            if (pictureCollaboration.isTeam(oldPicture) && pictureCollaboration.hasSharedPicture(pictureId)) {
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "该图片已有共享草稿，请通过协同图片工作台保存正式版本");
+            }
             // 仅本人或管理员可编辑图片
 //            if (!oldPicture.getUserId().equals(loginUser.getId()) && !userService.isAdmin(loginUser)) {
 //                throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "您没有权限编辑该图片");
@@ -224,7 +232,18 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         Long finalSpaceId = spaceId;
         transactionTemplate.execute((status) -> {
             // 插入数据
-            boolean result = this.saveOrUpdate(picture);
+            boolean result;
+            if (oldPicture == null) {
+                picture.setEditVersion(0L);
+                result = this.save(picture);
+            } else {
+                Long expected = pictureUploadRequest.getExpectedEditVersion();
+                picture.setUserId(oldPicture.getUserId());
+                picture.setEditVersion(expected + 1);
+                result = this.update(picture, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
+                    .eq("id", picture.getId()).eq("editVersion", expected));
+                mutationGuard.conflict(result);
+            }
             ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片上传失败，数据库操作失败");
             // 更新空间统计信息
             if (finalSpaceId != null) {
@@ -232,12 +251,13 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
                 int oldCountChange = oldPicture == null ? 0 : 1;
                 boolean updateResult = spaceService.lambdaUpdate()
                         .eq(Space::getId, finalSpaceId)
+                        .apply("totalSize + {0} - {1} <= maxSize AND totalCount + {2} <= maxCount", picture.getPicSize(), oldPictureSize, oldPicture == null ? 1 : 0)
 //                        .setSql("totalSize = totalSize + ? - ?", picture.getPicSize(), oldPictureSize)
 //                        .setSql("totalCount = totalCount + ? - ?", 1, oldCountChange)
                         .setSql("totalSize = totalSize + {0} - {1}, totalCount = totalCount + {2} - {3}",
                                 picture.getPicSize(), oldPictureSize, 1, oldCountChange)
                         .update();
-                ThrowUtils.throwIf(!updateResult, ErrorCode.OPERATION_ERROR, "空间统计信息更新失败");
+                ThrowUtils.throwIf(!updateResult, ErrorCode.OPERATION_ERROR, "空间容量或条数不足，图片未保存");
             }
 
             // 提交事务
@@ -412,8 +432,11 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         BeanUtil.copyProperties(pictureReviewRequest, updatePicture);
         updatePicture.setReviewerId(loginUser.getId());
         updatePicture.setReviewTime(new Date());
-        boolean result = this.updateById(updatePicture);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片审核失败，数据库操作失败");
+        Long expected = pictureReviewRequest.getExpectedEditVersion();
+        mutationGuard.requireVersion(expected);
+        updatePicture.setEditVersion(expected + 1);
+        mutationGuard.conflict(this.update(updatePicture, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
+                .eq("id", id).eq("editVersion", expected)));
     }
 
 
@@ -555,9 +578,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
     }
 
     @Override
-    public void deletePicture(long pictureId, User loginUser) {
+    public void deletePicture(long pictureId, User loginUser, Long expectedEditVersion) {
         ThrowUtils.throwIf(pictureId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null, ErrorCode.NO_AUTH_ERROR);
+        mutationGuard.requireVersion(expectedEditVersion);
         // 判断是否存在
         Picture oldPicture = this.getById(pictureId);
         ThrowUtils.throwIf(oldPicture == null, ErrorCode.NOT_FOUND_ERROR);
@@ -567,6 +591,9 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         Long spaceId = oldPicture.getSpaceId();
         // 开启事务
         transactionTemplate.execute(status -> {
+            Picture latest = this.lambdaQuery().eq(Picture::getId, pictureId).last("FOR UPDATE").one();
+            ThrowUtils.throwIf(latest == null, ErrorCode.NOT_FOUND_ERROR, "图片已删除");
+            mutationGuard.conflict(java.util.Objects.equals(latest.getEditVersion(), expectedEditVersion));
             // 操作数据库
             boolean result = this.removeById(pictureId);
             ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
@@ -575,7 +602,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
                 boolean update = spaceService.lambdaUpdate()
                         .eq(Space::getId, oldPicture.getSpaceId())
                         .setSql("totalSize = totalSize - {0} , totalCount = totalCount - {1}",
-                                oldPicture.getPicSize(), 1)
+                                latest.getPicSize(), 1)
 //                    .setSql("totalSize = totalSize - ?", oldPicture.getPicSize())
 //                    .setSql("totalCount = totalCount - ?", 1)
                         .update();
@@ -632,8 +659,11 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         // 补充审核参数
         this.fillReviewParams(picture, loginUser);
         // 操作数据库
-        boolean result = this.updateById(picture);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        Long expected = pictureEditRequest.getExpectedEditVersion();
+        mutationGuard.requireVersion(expected);
+        picture.setEditVersion(expected + 1);
+        mutationGuard.conflict(this.update(picture, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
+            .eq("id", id).eq("editVersion", expected)));
     }
 
 
@@ -681,6 +711,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional
     public void editPictureByBatch(PictureEditByBatchRequest pictureEditByBatchRequest, User loginUser) {
         // 1. 获取和校验参数
         List<Long> pictureIdList = pictureEditByBatchRequest.getPictureIdList();
@@ -698,7 +729,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         }
         // 3. 查询指定图片（仅选择需要的字段）
         List<Picture> pictureList = this.lambdaQuery()
-                .select(Picture::getId, Picture::getSpaceId)
+                .select(Picture::getId, Picture::getSpaceId, Picture::getEditVersion)
                 .eq(Picture::getSpaceId, spaceId)
                 .in(Picture::getId, pictureIdList)
                 .list();
@@ -718,8 +749,15 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         String nameRule = pictureEditByBatchRequest.getNameRule();
         fillPictureWithNameRule(pictureList, nameRule);
         // 5. 操作数据库进行批量更新
-        boolean result = this.updateBatchById(pictureList);
-        ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "批量编辑失败");
+        pictureList.sort(java.util.Comparator.comparing(Picture::getId));
+        ThrowUtils.throwIf(pictureList.size() != new java.util.HashSet<>(pictureIdList).size(), ErrorCode.OPERATION_ERROR, "部分图片已删除或不在此空间，批量修改已取消");
+        for (Picture item : pictureList) {
+            Long expected = pictureEditByBatchRequest.getExpectedVersions() == null ? null : pictureEditByBatchRequest.getExpectedVersions().get(item.getId());
+            mutationGuard.requireVersion(expected);
+            item.setEditVersion(expected + 1);
+            mutationGuard.conflict(this.update(item, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
+                .eq("id", item.getId()).eq("editVersion", expected)));
+        }
     }
 
     /**

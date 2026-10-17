@@ -53,6 +53,7 @@ public class SpaceServiceImpl extends ServiceImpl<SpaceMapper, Space>
 
     @Resource
     private TransactionTemplate transactionTemplate;
+    @Resource private com.zys.backend.service.MutationGuard mutationGuard;
 
     /**
      * 用户锁对象缓存
@@ -231,6 +232,7 @@ public class SpaceServiceImpl extends ServiceImpl<SpaceMapper, Space>
         Object lock = userLockMap.computeIfAbsent(userId, key -> new Object());
         try {
             Long newSpaceId = transactionTemplate.execute(status -> {
+                mutationGuard.lockUser(userId);
                 // 判断是否已有空间
                 boolean exists = this.lambdaQuery()
                         .eq(Space::getUserId, userId)

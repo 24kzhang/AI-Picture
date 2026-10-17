@@ -91,6 +91,7 @@ class PlanExecutorTest {
         ReflectionTestUtils.setField(validator, "toolRegistry", registry);
 
         executor = new PlanExecutor();
+        ReflectionTestUtils.setField(executor, "collaboration", mock(com.zys.backend.agent.service.PictureCollaborationService.class));
         agentRunMapper = mock(PictureAgentRunMapper.class);
         toolRunMapper = mock(PictureToolRunMapper.class);
         toolRunService = mock(ToolRunService.class);
