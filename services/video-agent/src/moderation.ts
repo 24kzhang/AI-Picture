@@ -1,11 +1,11 @@
-import { readFile, mkdir, readdir, rm } from 'node:fs/promises'
+import { readFile, mkdir, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { config, dataRoot } from './config.js'
 import { db, rows, json } from './db.js'
-import { command, ffmpegPath } from './hypit.js'
+import { extractReviewFrames } from './moderation-frames.js'
 
 export const verdictSchema=z.object({sexual:z.boolean(),violence:z.boolean(),gore:z.boolean()})
 export function decision(raw:unknown){
@@ -33,19 +33,14 @@ export async function scanModeration(){
     const metadata=json(record.metadata),path=metadata.path
     if(typeof path!=='string'||!existsSync(path))throw Error('审核原片暂不可用，请管理员复审')
     folder=resolve(dataRoot,'moderation',randomUUID());await mkdir(folder,{recursive:true})
-    // One sample per second plus both boundaries. Sampling is disclosed in the UI.
-    await command(ffmpegPath,['-v','error','-i',path,'-vf','fps=1,scale=640:-2','-q:v','3',resolve(folder,'sample-%04d.jpg')])
-    await command(ffmpegPath,['-v','error','-i',path,'-frames:v','1','-vf','scale=640:-2',resolve(folder,'first.jpg')])
-    await command(ffmpegPath,['-v','error','-sseof','-0.05','-i',path,'-frames:v','1','-vf','scale=640:-2',resolve(folder,'last.jpg')])
-    const paths=(await readdir(folder)).filter(f=>f.endsWith('.jpg')).sort().map(f=>resolve(folder!,f))
-    if(!paths.length)throw Error('未提取到审核画面')
+    const {paths}=await extractReviewFrames(path,folder)
     let result={status:1,message:'未发现色情、暴力或血腥内容'}
     for(let i=0;i<paths.length;i+=2){
       const current=(await rows('SELECT review_source,review_version FROM video_record WHERE id=? AND deleted=FALSE',[record.id]))[0]
       if(current?.review_source!=='pending'||current.review_version!==record.review_version)return
       result=await reviewFrames(paths.slice(i,i+2));if(result.status===2)break
     }
-    await db.query("UPDATE video_record SET review_status=?,review_source='ai',reviewer_name='AI审核',review_message=?,review_time=UTC_TIMESTAMP(3) WHERE id=? AND review_status=0 AND review_source='pending' AND review_version=? AND deleted=FALSE",[result.status,result.message+'（每秒抽帧及首尾帧）',record.id,record.review_version])
+    await db.query("UPDATE video_record SET review_status=?,review_source='ai',reviewer_name='AI审核',review_message=?,review_time=UTC_TIMESTAMP(3) WHERE id=? AND review_status=0 AND review_source='pending' AND review_version=? AND deleted=FALSE",[result.status,result.message+'（首帧、中间帧、尾帧，共3帧）',record.id,record.review_version])
   }catch(error){if(record)await db.query("UPDATE video_record SET review_message=?,review_time=UTC_TIMESTAMP(3) WHERE id=? AND review_status=0 AND review_source='pending' AND review_version=? AND deleted=FALSE",['AI审核暂不可用，等待重试或管理员审核',record.id,record.review_version]).catch(()=>{})}
   finally{if(folder)await rm(folder,{recursive:true,force:true}).catch(()=>{});working=false}
 }
