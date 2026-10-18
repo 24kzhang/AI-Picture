@@ -21,6 +21,8 @@ import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -39,6 +41,9 @@ public class AgentQueueService {
      * pending 消息空闲超过该时间后被认领重放
      */
     private static final long CLAIM_IDLE_MS = 2 * 60 * 1000L;
+
+    /** running 任务至少空闲 10 分钟才允许被宕机恢复，避免误杀正常长任务。 */
+    private static final long RUNNING_IDLE_MS = 10 * 60 * 1000L;
 
     @Resource
     private StringRedisTemplate stringRedisTemplate;
@@ -111,8 +116,11 @@ public class AgentQueueService {
             ack(recordId);
             return;
         }
-        toolRunService.executeQueued(toolRunId);
-        ack(recordId);
+        if (toolRunService.executeQueued(toolRunId)) {
+            ack(recordId);
+        } else {
+            log.info("工具任务尚未完成，保留 pending，toolRunId={}，recordId={}", toolRunId, recordId);
+        }
     }
 
     /**
@@ -133,6 +141,17 @@ public class AgentQueueService {
      */
     @Scheduled(fixedDelay = 60_000L, initialDelay = 30_000L)
     public void recoverPending() {
+        Date cutoff = new Date(System.currentTimeMillis() - RUNNING_IDLE_MS);
+        try {
+            List<Long> recovered = toolRunService.recoverStaleRunningTasks(cutoff, 50);
+            if (recovered != null) {
+                for (Long toolRunId : recovered) {
+                    enqueue(toolRunId);
+                }
+            }
+        } catch (Exception e) {
+            log.debug("恢复 stale running 工具任务失败：{}", e.getMessage());
+        }
         if (!streamsAvailable) {
             return;
         }
@@ -168,12 +187,24 @@ public class AgentQueueService {
             if (claimed == null || claimed.isEmpty()) {
                 return;
             }
+            Map<RecordId, ByteRecord> claimedById = new HashMap<>();
+            for (ByteRecord record : claimed) {
+                if (record != null && record.getId() != null) {
+                    claimedById.put(record.getId(), record);
+                }
+            }
             for (int i = 0; i < stale.size(); i++) {
-                long deliveryCount = stale.get(i).getTotalDeliveryCount();
-                ByteRecord record = i < claimed.size() ? claimed.get(i) : null;
+                PendingMessage pendingMessage = stale.get(i);
+                long deliveryCount = pendingMessage.getTotalDeliveryCount();
+                ByteRecord record = claimedById.get(pendingMessage.getId());
+                if (record == null) {
+                    // xClaim 可能只返回部分记录，未返回的消息仍属于 pending，不能 ACK。
+                    log.debug("pending 消息未被当前实例认领，保留 pending，recordId={}", pendingMessage.getId());
+                    continue;
+                }
                 String rawId = extractToolRunId(record);
                 if (StrUtil.isBlank(rawId)) {
-                    ack(stale.get(i).getId());
+                    ack(pendingMessage.getId());
                     continue;
                 }
                 if (deliveryCount > AgentConstant.MAX_TOOL_RUN_RETRIES) {
@@ -184,16 +215,17 @@ public class AgentQueueService {
                     } catch (Exception e) {
                         log.warn("标记超限任务失败异常，toolRunId={}", rawId, e);
                     }
-                    ack(stale.get(i).getId());
+                    ack(pendingMessage.getId());
                     continue;
                 }
                 try {
                     log.info("重放 pending 工具任务，toolRunId={}，deliveryCount={}", rawId, deliveryCount);
-                    toolRunService.executeQueued(Long.parseLong(rawId));
+                    if (toolRunService.executeQueued(Long.parseLong(rawId))) {
+                        ack(pendingMessage.getId());
+                    }
                 } catch (Exception e) {
                     log.error("重放 pending 工具任务异常，toolRunId={}", rawId, e);
                 }
-                ack(stale.get(i).getId());
             }
         } catch (Exception e) {
             log.debug("扫描 pending 工具任务失败：{}", e.getMessage());
@@ -206,8 +238,13 @@ public class AgentQueueService {
         }
         Map<byte[], byte[]> value = record.getValue();
         byte[] key = AgentConstant.STREAM_FIELD_TOOL_RUN_ID.getBytes(StandardCharsets.UTF_8);
-        byte[] raw = value.get(key);
-        return raw == null ? null : new String(raw, StandardCharsets.UTF_8);
+        for (Map.Entry<byte[], byte[]> entry : value.entrySet()) {
+            if (java.util.Arrays.equals(entry.getKey(), key)) {
+                byte[] raw = entry.getValue();
+                return raw == null ? null : new String(raw, StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     /**

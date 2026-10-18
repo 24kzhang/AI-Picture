@@ -29,6 +29,8 @@ public class IntegrationOutboxService {
 
     private static final int MAX_RETRIES = 5;
     private static final int BATCH_SIZE = 20;
+    /** 处理实例失联超过该时间后允许其他实例回收并重试。 */
+    private static final long PROCESSING_TIMEOUT_MS = 10 * 60 * 1000L;
 
     @Resource
     private IntegrationOutboxMapper outboxMapper;
@@ -72,6 +74,7 @@ public class IntegrationOutboxService {
      */
     @Scheduled(fixedDelay = 30_000L, initialDelay = 15_000L)
     public void processPending() {
+        recoverStaleProcessing();
         List<IntegrationOutbox> pending = outboxMapper.selectList(Wrappers.<IntegrationOutbox>lambdaQuery()
                 .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PENDING.getValue())
                 .orderByAsc(IntegrationOutbox::getCreateTime)
@@ -91,34 +94,85 @@ public class IntegrationOutboxService {
                 .lt(IntegrationOutbox::getRetries, MAX_RETRIES)
                 .last("limit " + BATCH_SIZE));
         for (IntegrationOutbox outbox : failed) {
-            IntegrationOutbox update = new IntegrationOutbox();
-            update.setId(outbox.getId());
-            update.setStatus(OutboxStatusEnum.PENDING.getValue());
-            outboxMapper.updateById(update);
+            int changed = outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
+                    .eq(IntegrationOutbox::getId, outbox.getId())
+                    .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.FAILED.getValue())
+                    .lt(IntegrationOutbox::getRetries, MAX_RETRIES)
+                    .set(IntegrationOutbox::getStatus, OutboxStatusEnum.PENDING.getValue())
+                    .set(IntegrationOutbox::getProcessTime, new Date()));
+            if (changed == 0) {
+                log.debug("Outbox 失败事件已被其他实例处理，跳过重新入队，id={}", outbox.getId());
+            }
+        }
+    }
+
+    /**
+     * 回收实例宕机留下的 processing 事件。外部派发必须保持幂等，
+     * 因为进程可能在派发成功后、状态回写前崩溃。
+     */
+    private void recoverStaleProcessing() {
+        Date cutoff = new Date(System.currentTimeMillis() - PROCESSING_TIMEOUT_MS);
+        List<IntegrationOutbox> processing = outboxMapper.selectList(Wrappers.<IntegrationOutbox>lambdaQuery()
+                .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
+                .lt(IntegrationOutbox::getProcessTime, cutoff)
+                .orderByAsc(IntegrationOutbox::getProcessTime)
+                .last("limit " + BATCH_SIZE));
+        if (processing == null || processing.isEmpty()) {
+            return;
+        }
+        for (IntegrationOutbox outbox : processing) {
+            int retries = (outbox.getRetries() == null ? 0 : outbox.getRetries()) + 1;
+            String status = retries >= MAX_RETRIES
+                    ? OutboxStatusEnum.FAILED.getValue() : OutboxStatusEnum.PENDING.getValue();
+            int changed = outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
+                    .eq(IntegrationOutbox::getId, outbox.getId())
+                    .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
+                    .lt(IntegrationOutbox::getProcessTime, cutoff)
+                    .set(IntegrationOutbox::getStatus, status)
+                    .set(IntegrationOutbox::getRetries, retries)
+                    .set(IntegrationOutbox::getProcessTime, new Date())
+                    .set(IntegrationOutbox::getErrorMessage, "处理实例超时，事件已回收"));
+            if (changed == 0) {
+                log.debug("Outbox processing 回收抢占失败，id={}", outbox.getId());
+            }
         }
     }
 
     private void process(IntegrationOutbox outbox) {
-        outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
+        int claimed = outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
                 .eq(IntegrationOutbox::getId, outbox.getId())
                 .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PENDING.getValue())
                 .set(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
                 .set(IntegrationOutbox::getProcessTime, new Date()));
+        if (claimed != 1) {
+            // 多实例同时扫描时，只有成功把 pending 改为 processing 的实例可以派发。
+            return;
+        }
         try {
             dispatch(outbox);
-            outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
+            int changed = outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
                     .eq(IntegrationOutbox::getId, outbox.getId())
-                    .set(IntegrationOutbox::getStatus, OutboxStatusEnum.SUCCEEDED.getValue()));
+                    .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
+                    .set(IntegrationOutbox::getStatus, OutboxStatusEnum.SUCCEEDED.getValue())
+                    .set(IntegrationOutbox::getErrorMessage, null));
+            if (changed == 0) {
+                log.debug("Outbox 成功回写未抢到 processing 状态，id={}", outbox.getId());
+            }
         } catch (Exception e) {
             int retries = (outbox.getRetries() == null ? 0 : outbox.getRetries()) + 1;
             String status = retries >= MAX_RETRIES
                     ? OutboxStatusEnum.FAILED.getValue() : OutboxStatusEnum.PENDING.getValue();
             log.warn("Outbox 事件处理失败，id={}，type={}，retries={}", outbox.getId(), outbox.getEventType(), retries, e);
-            outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
+            int changed = outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
                     .eq(IntegrationOutbox::getId, outbox.getId())
+                    .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
                     .set(IntegrationOutbox::getStatus, status)
                     .set(IntegrationOutbox::getRetries, retries)
+                    .set(IntegrationOutbox::getProcessTime, new Date())
                     .set(IntegrationOutbox::getErrorMessage, StrUtil.maxLength(e.getMessage(), 400)));
+            if (changed == 0) {
+                log.debug("Outbox 失败回写未抢到 processing 状态，id={}", outbox.getId());
+            }
         }
     }
 

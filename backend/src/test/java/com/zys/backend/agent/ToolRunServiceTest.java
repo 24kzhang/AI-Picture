@@ -18,7 +18,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -108,9 +110,23 @@ class ToolRunServiceTest {
         when(toolRunMapper.selectById(2001L)).thenReturn(run(ToolRunStatusEnum.QUEUED.getValue()));
         // 乐观抢占失败（另一个消费者已置为 running）
         when(toolRunMapper.update(any(), any())).thenReturn(0);
-        toolRunService.executeQueued(2001L);
+        assertEquals(false, toolRunService.executeQueued(2001L));
         assertEquals(0, handlerCalls.get());
         verify(planExecutor, never()).onToolRunFinished(any());
+    }
+
+    @Test
+    void staleRunningTasksAreResetWithConditionalClaim() {
+        PictureToolRun stale = run(ToolRunStatusEnum.RUNNING.getValue());
+        stale.setUpdateTime(new Date(System.currentTimeMillis() - 20 * 60 * 1000L));
+        Date cutoff = new Date(System.currentTimeMillis() - 10 * 60 * 1000L);
+        when(toolRunMapper.selectList(any())).thenReturn(Collections.singletonList(stale));
+        when(toolRunMapper.update(any(), any())).thenReturn(1);
+
+        List<Long> recovered = toolRunService.recoverStaleRunningTasks(cutoff, 50);
+
+        assertEquals(Collections.singletonList(2001L), recovered);
+        verify(toolRunMapper).update(any(), any());
     }
 
     @Test

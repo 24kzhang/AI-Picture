@@ -104,21 +104,29 @@ public class ToolRunService {
     }
 
     /**
-     * Redis Streams 消费入口：终态幂等跳过
+     * Redis Streams 消费入口：终态幂等跳过。
+     *
+     * @return true 表示消息已经完成处理，可以 ACK；false 表示当前仍有其他消费者执行，
+     * 或者读取/抢占任务时发生瞬时异常，必须保留 pending 以便后续恢复。
      */
-    public void executeQueued(Long toolRunId) {
-        execute(toolRunId);
+    public boolean executeQueued(Long toolRunId) {
+        try {
+            return execute(toolRunId);
+        } catch (Exception e) {
+            log.warn("队列任务执行前发生异常，保留 pending，toolRunId={}", toolRunId, e);
+            return false;
+        }
     }
 
-    private void execute(Long toolRunId) {
+    private boolean execute(Long toolRunId) {
         PictureToolRun run = toolRunMapper.selectById(toolRunId);
         if (run == null) {
             log.warn("工具任务不存在，跳过，toolRunId={}", toolRunId);
-            return;
+            return true;
         }
         if (ToolRunStatusEnum.isTerminal(run.getStatus())) {
             // 重复消费直接跳过终态任务
-            return;
+            return true;
         }
         // 乐观抢占：仅 pending/waiting/queued 可进入 running，防止多消费者并发重复执行
         boolean claimed = toolRunMapper.update(null, Wrappers.<PictureToolRun>lambdaUpdate()
@@ -131,7 +139,9 @@ public class ToolRunService {
                 .set(PictureToolRun::getStartedAt, new Date())
                 .set(PictureToolRun::getStage, "开始执行")) > 0;
         if (!claimed) {
-            return;
+            // running 可能是另一消费者正在执行，也可能是上次进程宕机遗留的旧状态。
+            // 旧状态由定时恢复任务按 updateTime 回收，当前消息不能提前 ACK。
+            return false;
         }
         run.setStatus(ToolRunStatusEnum.RUNNING.getValue());
         publishToolEvent(run, "progress", null);
@@ -150,25 +160,63 @@ public class ToolRunService {
             // 结果回写前再次检查取消意图与数据库状态
             if (isCancelRequested(run.getId())) {
                 markCanceled(run, "任务已按用户要求取消");
-                return;
+                return true;
             }
             PictureToolRun latest = toolRunMapper.selectById(run.getId());
             if (latest != null && ToolRunStatusEnum.CANCELED.getValue().equals(latest.getStatus())) {
                 log.info("任务已被取消，丢弃结果，toolRunId={}", run.getId());
-                return;
+                return true;
             }
             recordResult(run, result, inputRevision);
             markSucceeded(run, result);
+            return true;
         } catch (AgentToolException e) {
             markFailed(run, e.getMessage());
+            return true;
         } catch (BusinessException e) {
             markFailed(run, StrUtil.blankToDefault(e.getMessage(), "操作失败"));
+            return true;
         } catch (Exception e) {
             log.error("工具执行异常，tool={}，toolRunId={}", run.getTool(), run.getId(), e);
             markFailed(run, "执行失败，请重试");
+            return true;
         } finally {
             planExecutor.onToolRunFinished(run.getId());
         }
+    }
+
+    /**
+     * 将长时间没有心跳更新的 running 任务重新置为 queued，供队列重新投递。
+     * 条件更新保证多个实例同时恢复时只有一个实例能抢到该任务。
+     */
+    public List<Long> recoverStaleRunningTasks(Date cutoff, int limit) {
+        if (cutoff == null) {
+            return java.util.Collections.emptyList();
+        }
+        int safeLimit = Math.max(1, Math.min(limit, 200));
+        List<PictureToolRun> stale = toolRunMapper.selectList(Wrappers.<PictureToolRun>lambdaQuery()
+                .eq(PictureToolRun::getStatus, ToolRunStatusEnum.RUNNING.getValue())
+                .lt(PictureToolRun::getUpdateTime, cutoff)
+                .orderByAsc(PictureToolRun::getUpdateTime)
+                .last("LIMIT " + safeLimit));
+        if (stale == null || stale.isEmpty()) {
+            return java.util.Collections.emptyList();
+        }
+        List<Long> recovered = new java.util.ArrayList<>();
+        for (PictureToolRun run : stale) {
+            int changed = toolRunMapper.update(null, Wrappers.<PictureToolRun>lambdaUpdate()
+                    .eq(PictureToolRun::getId, run.getId())
+                    .eq(PictureToolRun::getStatus, ToolRunStatusEnum.RUNNING.getValue())
+                    .lt(PictureToolRun::getUpdateTime, cutoff)
+                    .set(PictureToolRun::getStatus, ToolRunStatusEnum.QUEUED.getValue())
+                    .set(PictureToolRun::getStartedAt, null)
+                    .set(PictureToolRun::getStage, "宕机恢复，重新排队")
+                    .setSql("retries = COALESCE(retries, 0) + 1"));
+            if (changed > 0) {
+                recovered.add(run.getId());
+            }
+        }
+        return recovered;
     }
 
     /**
