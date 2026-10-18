@@ -14,10 +14,15 @@ import { rows } from './db.js'
 import { applyOperations, type State, type Asset } from './timeline.js'
 import type { Actor } from './auth.js'
 import { ApiError, invariant } from './errors.js'
-const sessions=new Map<string,{port:number;process:ChildProcess;workspace:string;revision:number}>()
+import { isStudioIdle, type StudioActivity } from './studio-lifecycle.js'
+type StudioSession={port:number;process:ChildProcess;workspace:string;revision:number;lastUsedAt:number;activeRequests:number;activeSockets:number;entry?:string;base:string}
+const sessions=new Map<string,StudioSession>()
 const opening=new Map<string,Promise<any>>()
 const writes=new Map<string,Promise<void>>()
 let nextStudioPort=19000
+const maxStudios=Math.max(1,Number(process.env.VIDEO_MAX_STUDIOS||8))
+const studioIdleTtlMs=Math.max(60_000,Number(process.env.VIDEO_STUDIO_IDLE_TTL_MS||30*60*1000))
+const reapTimer=setInterval(()=>{void reapIdleStudios().catch(()=>{})},60_000);reapTimer.unref?.()
 async function studioPort():Promise<number>{
   while(nextStudioPort<65536){
     const port=nextStudioPort++
@@ -113,22 +118,58 @@ export async function openStudio(project:any,assets:Asset[]) {
   const work=openStudioWorkspace(project,assets);opening.set(project.id,work)
   try{return await work}finally{opening.delete(project.id)}
 }
+function touchStudio(id:string) {
+  const session=sessions.get(id);if(session)session.lastUsedAt=Date.now();return session
+}
+export function retainStudio(id:string,kind:'request'|'socket'='request') {
+  const session=touchStudio(id);if(!session)return undefined
+  if(kind==='socket')session.activeSockets++;else session.activeRequests++
+  return session
+}
+export function releaseStudio(id:string,kind:'request'|'socket'='request') {
+  const session=sessions.get(id);if(!session)return
+  if(kind==='socket')session.activeSockets=Math.max(0,session.activeSockets-1);else session.activeRequests=Math.max(0,session.activeRequests-1)
+  session.lastUsedAt=Date.now()
+}
+function forgetStudio(id:string,session:StudioSession) {
+  if(sessions.get(id)===session)sessions.delete(id)
+}
+function stopStudio(id:string,session:StudioSession) {
+  forgetStudio(id,session)
+  if(session.process.exitCode===null&&session.process.signalCode===null&&!session.process.killed)session.process.kill()
+}
+export async function reapIdleStudios(now=Date.now()) {
+  let removed=0
+  for(const [id,session] of sessions) {
+    const activity:StudioActivity={lastUsedAt:session.lastUsedAt,activeRequests:session.activeRequests,activeSockets:session.activeSockets}
+    if(isStudioIdle(activity,now,studioIdleTtlMs)){stopStudio(id,session);removed++}
+  }
+  return removed
+}
 async function openStudioWorkspace(project:any,assets:Asset[]) {
   const current=await revision(project.id),base=`/api/video-editor/projects/${project.id}/studio/`
   let session=sessions.get(project.id)
   if(session&&session.process.exitCode===null&&session.process.signalCode===null&&!session.process.killed && (session as any).entry===runEntry(current.source)) {
+    session.lastUsedAt=Date.now()
+    session.base=base
     if(session.revision!==current.revision){await writeWorkspace(project.id,'studio',current.source,assets);session.revision=current.revision}
     return {...session,base}
   }
-  session?.process.kill()
+  if(session)stopStudio(project.id,session)
+  await reapIdleStudios()
+  if(sessions.size>=maxStudios)throw new ApiError(429,'STUDIO_LIMIT','Studio 会话已达上限，请关闭闲置项目后重试')
   await patchStudio()
   const workspace=await writeWorkspace(project.id,'studio',current.source,assets)
   const port=await studioPort()
   const child=spawn(process.execPath,[resolve(hypitRoot,'bin/hypit.mjs'),'studio','--run',resolve(workspace,runEntry(current.source)),'--workspace',workspace,'--runtime',resolve(workspace,'hypit.runtime.json'),'--port',String(port)],
     {windowsHide:true,env:{...mediaEnvironment(process.env,[ffmpegPath,ffprobePath]),VIDEO_STUDIO_BASE:base,HYPIT_STATE_HOME:resolve(dataRoot,'hypit-state'),NODE_OPTIONS:'--use-system-ca',npm_config_cache:resolve(root,'runtime-data/npm-cache'),npm_config_registry:'https://registry.npmmirror.com'}})
-  const log=createWriteStream(resolve(workspace,'studio.log'),{flags:'a'});child.stdout.pipe(log);child.stderr.pipe(log);child.on('exit',()=>log.end())
+  const log=createWriteStream(resolve(workspace,'studio.log'),{flags:'a'})
   let error='';child.stderr.on('data',chunk=>{error=(error+chunk.toString()).slice(-6000)})
-  session={port,process:child,workspace,revision:current.revision};(session as any).entry=runEntry(current.source);sessions.set(project.id,session)
+  child.stdout.pipe(log);child.stderr.pipe(log)
+  session={port,process:child,workspace,revision:current.revision,lastUsedAt:Date.now(),activeRequests:0,activeSockets:0,entry:runEntry(current.source),base}
+  child.once('exit',()=>{log.end();forgetStudio(project.id,session!)})
+  child.once('error',()=>forgetStudio(project.id,session!))
+  sessions.set(project.id,session)
   for(let attempt=0;attempt<90;attempt++){
     if(child.exitCode!==null||child.signalCode!==null||child.killed)throw new ApiError(502,'STUDIO_START_FAILED',error||'Hypit Studio 启动失败')
     // Session reads can compile/process media. Polling that endpoint repeatedly invalidates its pending snapshots.
@@ -146,7 +187,12 @@ export async function proxyStudio(request:FastifyRequest,reply:FastifyReply,proj
 }
 async function proxyStudioRequest(request:FastifyRequest,reply:FastifyReply,project:any,actor:Actor,assets:Asset[]) {
   project=await getProject(project.id)
-  const session=await openStudio(project,assets),relative=request.url.slice(request.url.indexOf('/studio/')+8)
+  const session=await openStudio(project,assets)
+  retainStudio(project.id)
+  try{return await proxyStudioRequestUnsafe(request,reply,project,actor,assets,session)}finally{releaseStudio(project.id)}
+}
+async function proxyStudioRequestUnsafe(request:FastifyRequest,reply:FastifyReply,project:any,actor:Actor,assets:Asset[],session:StudioSession) {
+  const relative=request.url.slice(request.url.indexOf('/studio/')+8)
   if(relative.includes('..'))throw new ApiError(403,'STUDIO_PATH_REJECTED','不允许访问工作区外部文件')
   const mutation=request.method!=='GET'&&request.method!=='HEAD'
   let context:WriteContext|undefined,before:SourceBundle|undefined
@@ -241,6 +287,6 @@ export function nativeProjection(state:State,svml:string,svs:string,assets:Asset
   }
   return applyOperations(state,operations,assets,config.maxFrames)
 }
-export function closeStudios(){for(const session of sessions.values())session.process.kill()}
-export function studioSession(id:string){return sessions.get(id)}
+export function closeStudios(){clearInterval(reapTimer);for(const [id,session] of sessions)stopStudio(id,session);sessions.clear()}
+export function studioSession(id:string){return touchStudio(id)}
 

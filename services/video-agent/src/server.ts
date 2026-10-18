@@ -22,7 +22,7 @@ import { agentRun } from './agent.js'
 import { startModeration } from './moderation.js'
 import { generateAsset, modelSchemas, modelHealth, voices } from './providers.js'
 import { renderProject } from './render.js'
-import { proxyStudio, closeStudios, studioSession } from './studio.js'
+import { proxyStudio, closeStudios, studioSession, retainStudio, releaseStudio } from './studio.js'
 import {cloneVariant} from './variants.js'
 import {snapshotProject} from './snapshots.js'
 import {transcribeTimelineClip} from './transcription.js'
@@ -224,14 +224,17 @@ app.all(base+'/projects/:id/studio/*',async(request:any,reply)=>{const {value,ac
 app.server.on('upgrade',async(request,socket,head)=>{
   try{const match=request.url?.match(/^\/api\/video-editor\/projects\/([0-9a-f-]{36})\/studio\//);if(!match){socket.destroy();return}const value=await project(match[1]!);await projectActor({headers:request.headers} as any,value)
     const session=studioSession(value.id);if(!session){socket.destroy();return}
+    retainStudio(value.id,'socket')
     const upstream=http.request({host:'127.0.0.1',port:session.port,path:request.url,headers:{...request.headers,host:`127.0.0.1:${session.port}`}})
+    let upgraded=false
     upstream.on('upgrade',(response,remote,remoteHead)=>{
+      upgraded=true
       let closed=false,checking=false
-      const stop=()=>{if(closed)return;closed=true;clearInterval(authorization);socket.destroy();remote.destroy()}
+      const stop=()=>{if(closed)return;closed=true;clearInterval(authorization);releaseStudio(value.id,'socket');socket.destroy();remote.destroy()}
       const authorization=setInterval(async()=>{if(closed||checking)return;checking=true;try{await projectActor({headers:request.headers} as any,value)}catch{stop()}finally{checking=false}},15_000)
       socket.once('close',stop);remote.once('close',stop);socket.on('error',stop);remote.on('error',stop)
       socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(response.headers).map(([k,v])=>`${k}: ${v}`).join('\r\n')}\r\n\r\n`);if(remoteHead.length)socket.write(remoteHead);if(head.length)remote.write(head);socket.pipe(remote).pipe(socket)
-    });upstream.on('error',()=>socket.destroy());upstream.end()
+    });upstream.on('response',()=>{if(!upgraded)releaseStudio(value.id,'socket');socket.destroy()});upstream.on('error',()=>{if(!upgraded)releaseStudio(value.id,'socket');socket.destroy()});upstream.end()
   }catch{socket.destroy()}
 })
 await migrate();await recoverRuns()
