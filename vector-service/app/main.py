@@ -9,7 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from .chroma_store import ChromaStore
+from .chroma_store import ChromaStore, DuplicateScanLimitError
 from .config import settings
 from .embedding_client import ServerEmbeddingClient, EmbeddingError
 
@@ -155,7 +155,26 @@ def existing_vectors(request: ExistingVectorsRequest) -> dict[str, object]:
 
 @app.post("/vectors/duplicates")
 async def duplicate_vectors(request: DuplicateVectorsRequest) -> dict[str, object]:
-    groups = await run_in_threadpool(_store().duplicate_groups, request.threshold)
+    try:
+        groups = await run_in_threadpool(
+            _store().duplicate_groups,
+            request.threshold,
+            max_vectors=settings.duplicate_max_scan_vectors,
+            max_seconds=settings.duplicate_scan_time_budget_seconds,
+            max_neighbors=settings.duplicate_max_neighbors,
+        )
+    except DuplicateScanLimitError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message": str(exc),
+                "vectorCount": exc.vector_count,
+                "maxVectors": exc.max_vectors,
+                "elapsedSeconds": round(exc.elapsed_seconds, 3),
+                "maxSeconds": exc.max_seconds,
+            },
+        ) from exc
     return {
         "threshold": request.threshold,
         "vectorCount": _store().count,

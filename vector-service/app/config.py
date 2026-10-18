@@ -52,6 +52,17 @@ class Settings:
     request_limit_mb: int = field(
         default_factory=lambda: int(os.getenv("REQUEST_LIMIT_MB", "10"))
     )
+    duplicate_max_scan_vectors: int = field(
+        default_factory=lambda: int(os.getenv("DUPLICATE_MAX_SCAN_VECTORS", "20000"))
+    )
+    duplicate_scan_time_budget_seconds: float = field(
+        default_factory=lambda: float(
+            os.getenv("DUPLICATE_SCAN_TIME_BUDGET_SECONDS", "30")
+        )
+    )
+    duplicate_max_neighbors: int = field(
+        default_factory=lambda: int(os.getenv("DUPLICATE_MAX_NEIGHBORS", "128"))
+    )
 
     @property
     def collection_name(self) -> str:

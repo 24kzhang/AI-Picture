@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app import main as main_module
-from app.chroma_store import ChromaStore
+from app.chroma_store import ChromaStore, DuplicateScanLimitError
 from app.config import Settings
 from app.embedding_client import ServerEmbeddingClient, EmbeddingError
 
@@ -175,6 +175,16 @@ def test_chroma_groups_only_nearly_identical_vectors(tmp_path: Path) -> None:
     store.close()
 
 
+def test_chroma_duplicate_scan_rejects_over_limit_without_matrix(tmp_path: Path) -> None:
+    store = ChromaStore(tmp_path / "db", "gallery_duplicate_limit_test")
+    for picture_id in range(1, 4):
+        store.upsert(picture_id, 0, [1.0, 0.0, 0.0])
+
+    with pytest.raises(DuplicateScanLimitError, match="保护阈值"):
+        store.duplicate_groups(max_vectors=2)
+    store.close()
+
+
 class FakeEmbedder:
     configured = True
 
@@ -235,3 +245,30 @@ def test_vector_api_upsert_and_search_scope(
             "duplicateCount": 1,
             "groups": [[11, 12]],
         }
+
+
+def test_vector_duplicate_api_returns_structured_scan_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_path = tmp_path / "api-limit.png"
+    image_bytes = make_png(image_path)
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        replace(make_settings(tmp_path), duplicate_max_scan_vectors=2),
+    )
+    with TestClient(main_module.app) as client:
+        if main_module.embedding_client is not None:
+            main_module.embedding_client.close()
+        main_module.embedding_client = FakeEmbedder()
+        for picture_id in (21, 22, 23):
+            response = client.post(
+                "/vectors/upsert",
+                files={"image": ("api-limit.png", image_bytes, "image/png")},
+                data={"pictureId": str(picture_id), "spaceId": "0"},
+            )
+            assert response.status_code == 200
+
+        response = client.post("/vectors/duplicates", json={"threshold": 0.999999})
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "DUPLICATE_SCAN_LIMIT"
