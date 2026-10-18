@@ -23,6 +23,8 @@ import javax.annotation.PreDestroy;
 import javax.annotation.Resource;
 import java.util.Collections;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -46,6 +48,8 @@ public class QwenImageEditor {
 
     private final Cache<String, GetOutPaintingTaskResponse> tasks = Caffeine.newBuilder()
             .maximumSize(128).expireAfterWrite(24, TimeUnit.HOURS).build();
+    /** 任务归属只用于轮询鉴权，和状态缓存同生命周期。 */
+    private final Map<String, Long> taskOwners = new ConcurrentHashMap<>();
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(2, 2, 0L,
             TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(16), runnable -> {
                 Thread thread = new Thread(runnable, "qwen-image-edit");
@@ -65,18 +69,35 @@ public class QwenImageEditor {
         return submitTask(taskId -> generate(taskId, imageUrl, prompt, mask, keepAlpha));
     }
 
+    public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt, byte[] mask,
+                                                boolean keepAlpha, Long ownerId) {
+        return submitTask(taskId -> generate(taskId, imageUrl, prompt, mask, keepAlpha), ownerId);
+    }
+
     public CreateOutPaintingTaskResponse submitOutpaint(String imageUrl, String prompt,
                                                          CreateOutPaintingTaskRequest.Parameters parameters) {
         return submitTask(taskId -> generateOutpaint(taskId, imageUrl, prompt, parameters));
     }
 
+    public CreateOutPaintingTaskResponse submitOutpaint(String imageUrl, String prompt,
+                                                         CreateOutPaintingTaskRequest.Parameters parameters,
+                                                         Long ownerId) {
+        return submitTask(taskId -> generateOutpaint(taskId, imageUrl, prompt, parameters), ownerId);
+    }
+
     private CreateOutPaintingTaskResponse submitTask(Consumer<String> action) {
+        return submitTask(action, null);
+    }
+
+    private CreateOutPaintingTaskResponse submitTask(Consumer<String> action, Long ownerId) {
         String taskId = TASK_PREFIX + UUID.randomUUID();
         tasks.put(taskId, state(taskId, "PENDING"));
+        if (ownerId != null) taskOwners.put(taskId, ownerId);
         try {
             executor.execute(() -> action.accept(taskId));
         } catch (RejectedExecutionException e) {
             tasks.invalidate(taskId);
+            taskOwners.remove(taskId);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 编辑任务较多，请稍后重试");
         }
         CreateOutPaintingTaskResponse response = new CreateOutPaintingTaskResponse();
@@ -100,6 +121,16 @@ public class QwenImageEditor {
         response = state(taskId, "UNKNOWN");
         response.getOutput().setMessage("任务已过期或服务已重启，请重新生成");
         return response;
+    }
+
+    public GetOutPaintingTaskResponse getTask(String taskId, Long ownerId) {
+        Long taskOwner = taskOwners.get(taskId);
+        if (taskOwner != null && !taskOwner.equals(ownerId)) {
+            GetOutPaintingTaskResponse response = state(taskId, "UNKNOWN");
+            response.getOutput().setMessage("任务不存在或无权访问");
+            return response;
+        }
+        return getTask(taskId);
     }
 
     /** 只信任本服务已成功生成的产物，不能用于放行任意内网 URL。 */
@@ -222,5 +253,6 @@ public class QwenImageEditor {
     @PreDestroy
     public void close() {
         executor.shutdownNow();
+        taskOwners.clear();
     }
 }

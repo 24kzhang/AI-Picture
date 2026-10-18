@@ -118,4 +118,14 @@ class QwenImageEditorTest {
         assertEquals("UNKNOWN", editor.getTask("qwen-local-missing").getOutput().getTaskStatus());
         assertNull(request.get());
     }
+
+    @Test
+    void rejectsPollingByAnotherUser() {
+        String id = editor.submit("http://127.0.0.1/source", "测试", null, true, 10L)
+                .getOutput().getTaskId();
+        GetOutPaintingTaskResponse result = editor.getTask(id, 11L);
+        assertEquals("UNKNOWN", result.getOutput().getTaskStatus());
+        assertEquals("任务不存在或无权访问", result.getOutput().getMessage());
+        assertEquals("PENDING", editor.getTask(id, 10L).getOutput().getTaskStatus());
+    }
 }

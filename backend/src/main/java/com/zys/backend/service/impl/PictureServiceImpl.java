@@ -884,7 +884,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         createOutPaintingTaskRequest.setInput(input);
         createOutPaintingTaskRequest.setParameters(createPictureOutPaintingTaskRequest.getParameters());
         // 创建任务
-        return aliYunAiApi.createOutPaintingTask(createOutPaintingTaskRequest);
+        return aliYunAiApi.createOutPaintingTask(createOutPaintingTaskRequest, loginUser.getId());
     }
 
     /**
@@ -900,7 +900,7 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND_ERROR, "图片不存在"));
         return aliYunAiApi.createImageEditTask(picture.getUrl(),
                 createPictureAiEditTaskRequest.getPrompt(),
-                createPictureAiEditTaskRequest.getStrength());
+                createPictureAiEditTaskRequest.getStrength(), null, true, loginUser.getId());
     }
 
 

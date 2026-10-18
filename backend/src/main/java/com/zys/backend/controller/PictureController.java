@@ -424,9 +424,10 @@ public class PictureController {
      * 查询 AI 扩图任务
      */
     @GetMapping("/out_painting/get_task")
-    public BaseResponse<GetOutPaintingTaskResponse> getPictureOutPaintingTask(String taskId) {
+    public BaseResponse<GetOutPaintingTaskResponse> getPictureOutPaintingTask(String taskId, HttpServletRequest request) {
         ThrowUtils.throwIf(StrUtil.isBlank(taskId), ErrorCode.PARAMS_ERROR);
-        GetOutPaintingTaskResponse task = aliYunAiApi.getOutPaintingTask(taskId);
+        User loginUser = userService.getLoginUser(request);
+        GetOutPaintingTaskResponse task = aliYunAiApi.getOutPaintingTask(taskId, loginUser.getId());
         return ResultUtils.success(task);
     }
 
@@ -455,9 +456,10 @@ public class PictureController {
      * 查询 AI 指令编辑任务
      */
     @GetMapping("/ai_edit/get_task")
-    public BaseResponse<GetOutPaintingTaskResponse> getPictureAiEditTask(String taskId) {
+    public BaseResponse<GetOutPaintingTaskResponse> getPictureAiEditTask(String taskId, HttpServletRequest request) {
         ThrowUtils.throwIf(StrUtil.isBlank(taskId), ErrorCode.PARAMS_ERROR);
-        return ResultUtils.success(aliYunAiApi.getOutPaintingTask(taskId));
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(aliYunAiApi.getOutPaintingTask(taskId, loginUser.getId()));
     }
 
 
