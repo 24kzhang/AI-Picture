@@ -13,6 +13,9 @@ export async function probe(path: string) {
   return JSON.parse(await command(ffprobePath, ['-v','error','-show_format','-show_streams','-of','json',path]))
 }
 export async function storeObject(actor: Actor, scope: Scope, path: string, extension: string) {
+  return storeObjectTracked(actor, scope, path, extension)
+}
+async function storeObjectTracked(actor: Actor, scope: Scope, path: string, extension: string, created?: Set<string>) {
   const bytes = await readFile(path), digest = createHash('sha256').update(bytes).digest('hex')
   const scopeName = scope.space_id ? `space-${scope.space_id}` : `public-${scope.owner_id || actor.userId}`
   return transaction(async connection => {
@@ -27,7 +30,19 @@ export async function storeObject(actor: Actor, scope: Scope, path: string, exte
     if (!response.ok) throw new ApiError(502, 'COS_UPLOAD_FAILED', `COS 上传失败 (${response.status})`)
     await connection.query('INSERT INTO video_object(scope,digest,object_key,size) VALUES (?,?,?,?)', [scopeName,digest,key,bytes.length])
     await connection.query('UPDATE video_quota SET bytes=bytes+? WHERE scope=?', [bytes.length,scopeName])
+    created?.add(key)
     return key
+  })
+}
+async function deleteObject(actor: Actor, scope: Scope, key: string) {
+  const {url}=await ticket(actor,scope,key,'DELETE')
+  const response=await fetch(url,{method:'DELETE',signal:AbortSignal.timeout(60_000)})
+  if(!response.ok && response.status!==404)throw new ApiError(502,'COS_DELETE_FAILED',`COS 清理失败 (${response.status})`)
+  await transaction(async connection=>{
+    const found=(await rows('SELECT scope,size FROM video_object WHERE object_key=? FOR UPDATE',[key],connection))[0]
+    if(!found)return
+    await connection.query('DELETE FROM video_object WHERE object_key=?',[key])
+    await connection.query('UPDATE video_quota SET bytes=GREATEST(bytes-?,0) WHERE scope=?',[found.size,found.scope])
   })
 }
 export async function importAsset(project: any, actor: Actor, input: string, name: string, purpose?: 'speech'): Promise<Asset> {
@@ -77,18 +92,24 @@ export async function importAsset(project: any, actor: Actor, input: string, nam
     }
   }
   if(purpose)asset.purpose=purpose
-  // Upload every retained immutable object before the asset can be inserted into a project.
-  asset.originalKey = await storeObject(actor,project,original,extname(original).slice(1) || 'bin')
-  asset.objectKey = await storeObject(actor,project,asset.path,asset.kind==='image'?'png':asset.kind==='video'?'mp4':'wav')
-  if (asset.audioPath) asset.audioKey = await storeObject(actor,project,asset.audioPath,'wav')
-  if (asset.kind==='video' || asset.kind==='image') {
-    const poster = resolve(directory,'poster.jpg')
-    if (asset.kind==='image') await sharp(asset.path).resize({width:480,withoutEnlargement:true}).flatten({background:'#000000'}).jpeg().toFile(poster)
-    else await command(ffmpegPath,['-y','-i',asset.path,'-frames:v','1','-vf','scale=480:-1',poster])
-    asset.posterKey = await storeObject(actor,project,poster,'jpg')
+  const createdKeys=new Set<string>()
+  try {
+    // Upload every retained immutable object before the asset can be inserted into a project.
+    asset.originalKey = await storeObjectTracked(actor,project,original,extname(original).slice(1) || 'bin',createdKeys)
+    asset.objectKey = await storeObjectTracked(actor,project,asset.path,asset.kind==='image'?'png':asset.kind==='video'?'mp4':'wav',createdKeys)
+    if (asset.audioPath) asset.audioKey = await storeObjectTracked(actor,project,asset.audioPath,'wav',createdKeys)
+    if (asset.kind==='video' || asset.kind==='image') {
+      const poster = resolve(directory,'poster.jpg')
+      if (asset.kind==='image') await sharp(asset.path).resize({width:480,withoutEnlargement:true}).flatten({background:'#000000'}).jpeg().toFile(poster)
+      else await command(ffmpegPath,['-y','-i',asset.path,'-frames:v','1','-vf','scale=480:-1',poster])
+      asset.posterKey = await storeObjectTracked(actor,project,poster,'jpg',createdKeys)
+    }
+    await db.query('INSERT INTO video_asset(id,project_id,name,kind,metadata) VALUES (?,?,?,?,?)',[id,project.id,asset.name,asset.kind,JSON.stringify(asset)])
+    return asset
+  } catch (error) {
+    for (const key of createdKeys) { try { await deleteObject(actor,project,key) } catch { /* 清理失败由下一次一致性任务处理 */ } }
+    throw error
   }
-  await db.query('INSERT INTO video_asset(id,project_id,name,kind,metadata) VALUES (?,?,?,?,?)',[id,project.id,asset.name,asset.kind,JSON.stringify(asset)])
-  return asset
 }
 export async function projectAssets(projectId: string, actor?: Actor, scope?: Scope): Promise<Asset[]> {
   const assets = (await rows('SELECT metadata FROM video_asset WHERE project_id=? ORDER BY created_at', [projectId])).map(row=>json<Asset>(row.metadata))
@@ -135,7 +156,12 @@ export async function importPicture(project: any, actor: Actor, pictureId: strin
   invariant(/^\d+$/.test(pictureId),'无效图片标识')
   const response=await fetch(`${config.javaUrl}/internal/video/pictures/${pictureId}`,{headers:{Cookie:actor.cookie,'X-Video-Service-Key':serviceKey},signal:AbortSignal.timeout(60_000)})
   invariant(response.ok && response.headers.get('content-type')==='application/octet-stream','无法授权访问原图片')
-  const temporary=resolve(dataRoot,`picture-${randomUUID()}.bin`);await writeFile(temporary,Buffer.from(await response.arrayBuffer()))
-  return importAsset(project,actor,temporary,`图库图片-${pictureId}.png`)
+  const temporary=resolve(dataRoot,`picture-${randomUUID()}.bin`)
+  try {
+    await writeFile(temporary,Buffer.from(await response.arrayBuffer()))
+    return await importAsset(project,actor,temporary,`图库图片-${pictureId}.png`)
+  } finally {
+    await unlink(temporary).catch(()=>{})
+  }
 }
 
