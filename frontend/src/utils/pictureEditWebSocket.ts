@@ -50,7 +50,9 @@ export default class PictureEditWebSocket {
     this.socket.onclose = (event) => {
       console.log('WebSocket 连接已关闭:', event)
       this.triggerEvent('close', event)
-      if (!this.stopped) this.reconnectTimer = window.setTimeout(() => this.connect(), 2000)
+      // 1008 代表服务端因权限失效主动撤销会话，重连只会重复失败并制造连接压力。
+      // 网络抖动等其他关闭仍保留自动重连能力。
+      if (!this.stopped && event.code !== 1008) this.reconnectTimer = window.setTimeout(() => this.connect(), 2000)
     }
 
     // 监听错误事件

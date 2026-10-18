@@ -24,6 +24,8 @@ import com.zys.backend.service.SpaceService;
 import com.zys.backend.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -507,6 +509,31 @@ public class PictureEditHandler extends TextWebSocketHandler {
         response.setType("COLLABORATION_CHANGED");
         try { broadcastToPicture(event.getPictureId(), response); }
         catch (IOException e) { log.debug("协同通知失败，客户端将通过快照恢复", e); }
+    }
+
+    /**
+     * 成员移除或降权的事务提交后立即关闭该成员在目标空间内的图片协同连接。
+     * 关闭动作放在提交阶段，避免事务回滚时误伤仍有效的会话。
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onSpaceUserPermissionChanged(SpaceUserPermissionChangedEvent event) {
+        if (event == null || event.getSpaceId() == null || event.getUserId() == null) {
+            return;
+        }
+        String message = "空间成员权限已变更，请重新进入图片协同";
+        for (Set<WebSocketSession> sessionSet : new ArrayList<>(pictureSessions.values())) {
+            for (WebSocketSession session : new ArrayList<>(sessionSet)) {
+                User user = (User) session.getAttributes().get("user");
+                Long pictureId = (Long) session.getAttributes().get("pictureId");
+                if (user == null || !event.getUserId().equals(user.getId()) || pictureId == null) {
+                    continue;
+                }
+                Picture picture = pictureService.getById(pictureId);
+                if (picture != null && event.getSpaceId().equals(picture.getSpaceId())) {
+                    revokeSession(session, message);
+                }
+            }
+        }
     }
 }
 

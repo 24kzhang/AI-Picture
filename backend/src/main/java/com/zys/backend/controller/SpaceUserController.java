@@ -9,6 +9,7 @@ import com.zys.backend.exception.ErrorCode;
 import com.zys.backend.exception.ThrowUtils;
 import com.zys.backend.manager.auth.annotation.SaSpaceCheckPermission;
 import com.zys.backend.manager.auth.model.SpaceUserPermissionConstant;
+import com.zys.backend.manager.websocket.SpaceUserPermissionChangedEvent;
 import com.zys.backend.model.dto.spaceuser.SpaceUserAddRequest;
 import com.zys.backend.model.dto.spaceuser.SpaceUserEditRequest;
 import com.zys.backend.model.dto.spaceuser.SpaceUserQueryRequest;
@@ -19,6 +20,7 @@ import com.zys.backend.service.SpaceUserService;
 import com.zys.backend.service.UserService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,6 +45,9 @@ public class SpaceUserController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private ApplicationEventPublisher applicationEventPublisher;
 
     /**
      * 添加成员到空间
@@ -75,6 +80,8 @@ public class SpaceUserController {
         // 操作数据库
         boolean result = spaceUserService.remove(new com.baomidou.mybatisplus.core.conditions.query.QueryWrapper<SpaceUser>().eq("id",id).eq("mutationVersion",deleteRequest.getExpectedMutationVersion()));
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"成员已被修改或移除，请刷新后重新确认");
+        applicationEventPublisher.publishEvent(new SpaceUserPermissionChangedEvent(
+                oldSpaceUser.getSpaceId(), oldSpaceUser.getUserId()));
         return ResultUtils.success(true);
     }
 
@@ -136,6 +143,8 @@ public class SpaceUserController {
         // 操作数据库
         boolean result = spaceUserService.update(spaceUser,new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<SpaceUser>().eq("id",id).eq("mutationVersion",expected));
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR,"成员权限已被修改或成员已移除，请刷新后重新确认");
+        applicationEventPublisher.publishEvent(new SpaceUserPermissionChangedEvent(
+                oldSpaceUser.getSpaceId(), oldSpaceUser.getUserId()));
         return ResultUtils.success(true);
     }
 
