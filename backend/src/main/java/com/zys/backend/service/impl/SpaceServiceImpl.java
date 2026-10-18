@@ -31,6 +31,7 @@ import org.springframework.context.annotation.Lazy;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -45,6 +46,19 @@ import java.util.stream.Collectors;
 @Service
 public class SpaceServiceImpl extends ServiceImpl<SpaceMapper, Space>
         implements SpaceService {
+    private static final Map<String, String> SORT_COLUMNS = new HashMap<>();
+
+    static {
+        SORT_COLUMNS.put("id", "id");
+        SORT_COLUMNS.put("spaceName", "spaceName");
+        SORT_COLUMNS.put("spaceLevel", "spaceLevel");
+        SORT_COLUMNS.put("spaceType", "spaceType");
+        SORT_COLUMNS.put("totalSize", "totalSize");
+        SORT_COLUMNS.put("totalCount", "totalCount");
+        SORT_COLUMNS.put("createTime", "createTime");
+        SORT_COLUMNS.put("updateTime", "updateTime");
+    }
+
     @Resource
     private UserService userService;
 
@@ -187,8 +201,21 @@ public class SpaceServiceImpl extends ServiceImpl<SpaceMapper, Space>
         queryWrapper.like(StrUtil.isNotBlank(spaceName), "spaceName", spaceName);
         queryWrapper.eq(ObjUtil.isNotEmpty(spaceLevel), "spaceLevel", spaceLevel);
         queryWrapper.eq(ObjUtil.isNotEmpty(spaceType), "spaceType", spaceType);
-        // 排序
-        queryWrapper.orderBy(StrUtil.isNotEmpty(sortField), sortOrder.equals("ascend"), sortField);
+        // 排序字段来自请求，必须映射到固定列名，不能直接拼接 SQL。
+        if (StrUtil.isNotBlank(sortField)) {
+            String column = SORT_COLUMNS.get(sortField);
+            ThrowUtils.throwIf(column == null, ErrorCode.PARAMS_ERROR, "不支持的空间排序字段");
+            boolean ascending;
+            if (StrUtil.isBlank(sortOrder) || "descend".equalsIgnoreCase(sortOrder)
+                    || "desc".equalsIgnoreCase(sortOrder)) {
+                ascending = false;
+            } else if ("ascend".equalsIgnoreCase(sortOrder) || "asc".equalsIgnoreCase(sortOrder)) {
+                ascending = true;
+            } else {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "不支持的空间排序方向");
+            }
+            queryWrapper.orderBy(true, ascending, column);
+        }
         return queryWrapper;
     }
 

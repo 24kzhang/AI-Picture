@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.zys.backend.constant.UserConstant;
 import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
+import com.zys.backend.exception.ThrowUtils;
 import com.zys.backend.manager.auth.StpKit;
 import com.zys.backend.mapper.UserMapper;
 import com.zys.backend.model.dto.user.UserQueryRequest;
@@ -23,7 +24,9 @@ import org.springframework.util.DigestUtils;
 
 import javax.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -34,6 +37,17 @@ import java.util.stream.Collectors;
 @Service
 @Slf4j
 public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements UserService {
+    private static final Map<String, String> SORT_COLUMNS = new HashMap<>();
+
+    static {
+        SORT_COLUMNS.put("id", "id");
+        SORT_COLUMNS.put("userAccount", "userAccount");
+        SORT_COLUMNS.put("userName", "userName");
+        SORT_COLUMNS.put("userRole", "userRole");
+        SORT_COLUMNS.put("createTime", "createTime");
+        SORT_COLUMNS.put("updateTime", "updateTime");
+    }
+
     /**
      * 用户注册
      *
@@ -192,7 +206,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User> implements Us
         queryWrapper.like(StrUtil.isNotBlank(userAccount), "userAccount", userAccount);
         queryWrapper.like(StrUtil.isNotBlank(userName), "userName", userName);
         queryWrapper.like(StrUtil.isNotBlank(userProfile), "userProfile", userProfile);
-        queryWrapper.orderBy(StrUtil.isNotEmpty(sortField), sortOrder.equals("ascend"), sortField);
+        // 排序字段来自请求，必须映射到固定列名，不能直接拼接 SQL。
+        if (StrUtil.isNotBlank(sortField)) {
+            String column = SORT_COLUMNS.get(sortField);
+            ThrowUtils.throwIf(column == null, ErrorCode.PARAMS_ERROR, "不支持的用户排序字段");
+            boolean ascending;
+            if (StrUtil.isBlank(sortOrder) || "descend".equalsIgnoreCase(sortOrder)
+                    || "desc".equalsIgnoreCase(sortOrder)) {
+                ascending = false;
+            } else if ("ascend".equalsIgnoreCase(sortOrder) || "asc".equalsIgnoreCase(sortOrder)) {
+                ascending = true;
+            } else {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "不支持的用户排序方向");
+            }
+            queryWrapper.orderBy(true, ascending, column);
+        }
 
         return queryWrapper;
     }
