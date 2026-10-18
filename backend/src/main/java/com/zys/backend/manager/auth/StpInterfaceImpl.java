@@ -70,24 +70,22 @@ public class StpInterfaceImpl implements StpInterface {
         }
         // 管理员权限，表示权限校验通过
         List<String> ADMIN_PERMISSIONS = spaceUserAuthManager.getPermissionsByRole(SpaceRoleEnum.ADMIN.getValue());
-        // 获取上下文对象
-        SpaceUserAuthContext authContext = getAuthContextByRequest();
-        // 如果所有字段都为空，表示查询公共图库，可以通过
-        if (isAllFieldsNull(authContext)) {
-            return ADMIN_PERMISSIONS;
-        }
         // 获取 userId
         User loginUser = (User) StpKit.SPACE.getSessionByLoginId(loginId).get(USER_LOGIN_STATE);
         if (loginUser == null) {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "用户未登录");
         }
         Long userId = loginUser.getId();
-        // 优先从上下文中获取 SpaceUser 对象
-        SpaceUser spaceUser = authContext.getSpaceUser();
-        if (spaceUser != null) {
-            return spaceUserAuthManager.getPermissionsByRole(spaceUser.getSpaceRole());
+        // 上下文缺失时只能按当前登录账号给出最小公共读取权限，不能直接授予管理员权限。
+        SpaceUserAuthContext authContext = getAuthContextByRequest();
+        if (isAllFieldsNull(authContext)) {
+            return userService.isAdmin(loginUser)
+                    ? ADMIN_PERMISSIONS
+                    : Collections.singletonList(SpaceUserPermissionConstant.PICTURE_VIEW);
         }
-        // 如果有 spaceUserId，必然是团队空间，通过数据库查询 SpaceUser 对象
+
+        // 只信任请求中的目标 ID，忽略请求体内可伪造的 spaceUser / space 对象和角色字段。
+        SpaceUser spaceUser;
         Long spaceUserId = authContext.getSpaceUserId();
         if (spaceUserId != null) {
             spaceUser = spaceUserService.getById(spaceUserId);
@@ -110,9 +108,9 @@ public class StpInterfaceImpl implements StpInterface {
         if (spaceId == null) {
             // 如果没有 spaceId，通过 pictureId 获取 Picture 对象和 Space 对象
             Long pictureId = authContext.getPictureId();
-            // 图片 id 也没有，则默认通过权限校验
+            // 没有可验证的资源 ID 时拒绝高权限请求。
             if (pictureId == null) {
-                return ADMIN_PERMISSIONS;
+                return new ArrayList<>();
             }
             Picture picture = pictureService.lambdaQuery()
                     .eq(Picture::getId, pictureId)
@@ -170,13 +168,20 @@ public class StpInterfaceImpl implements StpInterface {
      * 从请求中获取上下文对象
      */
     private SpaceUserAuthContext getAuthContextByRequest() {
-        HttpServletRequest request = ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest();
+        ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attributes == null) {
+            return new SpaceUserAuthContext();
+        }
+        HttpServletRequest request = attributes.getRequest();
         String contentType = request.getHeader(Header.CONTENT_TYPE.getValue());
         SpaceUserAuthContext authRequest;
         // 获取请求参数
-        if (ContentType.JSON.getValue().equals(contentType)) {
+        String mediaType = contentType == null ? "" : contentType.split(";", 2)[0].trim();
+        if (ContentType.JSON.getValue().equalsIgnoreCase(mediaType)) {
             String body = ServletUtil.getBody(request);
-            authRequest = JSONUtil.toBean(body, SpaceUserAuthContext.class);
+            authRequest = StrUtil.isBlank(body)
+                    ? new SpaceUserAuthContext()
+                    : JSONUtil.toBean(body, SpaceUserAuthContext.class);
         } else {
             Map<String, String> paramMap = ServletUtil.getParamMap(request);
             authRequest = BeanUtil.toBean(paramMap, SpaceUserAuthContext.class);
