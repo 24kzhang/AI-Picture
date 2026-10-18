@@ -114,7 +114,9 @@ public class IntegrationOutboxService {
         Date cutoff = new Date(System.currentTimeMillis() - PROCESSING_TIMEOUT_MS);
         List<IntegrationOutbox> processing = outboxMapper.selectList(Wrappers.<IntegrationOutbox>lambdaQuery()
                 .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
-                .lt(IntegrationOutbox::getProcessTime, cutoff)
+                .and(wrapper -> wrapper.isNull(IntegrationOutbox::getProcessTime)
+                        .or()
+                        .lt(IntegrationOutbox::getProcessTime, cutoff))
                 .orderByAsc(IntegrationOutbox::getProcessTime)
                 .last("limit " + BATCH_SIZE));
         if (processing == null || processing.isEmpty()) {
@@ -127,7 +129,9 @@ public class IntegrationOutboxService {
             int changed = outboxMapper.update(null, Wrappers.<IntegrationOutbox>lambdaUpdate()
                     .eq(IntegrationOutbox::getId, outbox.getId())
                     .eq(IntegrationOutbox::getStatus, OutboxStatusEnum.PROCESSING.getValue())
-                    .lt(IntegrationOutbox::getProcessTime, cutoff)
+                    .and(wrapper -> wrapper.isNull(IntegrationOutbox::getProcessTime)
+                            .or()
+                            .lt(IntegrationOutbox::getProcessTime, cutoff))
                     .set(IntegrationOutbox::getStatus, status)
                     .set(IntegrationOutbox::getRetries, retries)
                     .set(IntegrationOutbox::getProcessTime, new Date())

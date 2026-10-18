@@ -77,6 +77,21 @@ class IntegrationOutboxServiceTest {
     }
 
     @Test
+    void processingWithoutProcessTimeIsAlsoRequeued() {
+        IntegrationOutbox outbox = vectorEvent(1004L);
+        outbox.setStatus(OutboxStatusEnum.PROCESSING.getValue());
+        outbox.setProcessTime(null);
+        outbox.setRetries(1);
+        when(outboxMapper.selectList(any())).thenReturn(Collections.singletonList(outbox));
+        when(outboxMapper.update(any(), any())).thenReturn(1);
+
+        ReflectionTestUtils.invokeMethod(service, "recoverStaleProcessing");
+
+        verify(outboxMapper).update(any(), any());
+        verifyNoInteractions(vectorClient, pictureMapper, storageService);
+    }
+
+    @Test
     void successfulDispatchMustAlsoOwnProcessingStateOnWriteBack() {
         IntegrationOutbox outbox = vectorEvent(1003L);
         when(outboxMapper.update(any(), any())).thenReturn(1);
