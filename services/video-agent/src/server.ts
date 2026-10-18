@@ -27,9 +27,11 @@ import {cloneVariant} from './variants.js'
 import {snapshotProject} from './snapshots.js'
 import {transcribeTimelineClip} from './transcription.js'
 import {annotationMembers, annotationLimit, annotationLease, operateAnnotations} from './annotations.js'
+import { cleanupUploadTempFiles, removeUploadTemp } from './upload-temp.js'
 
 export const app=Fastify({logger:{level:'info',redact:['req.headers.cookie','req.headers.authorization','req.headers.x-video-service-key']},bodyLimit:2*1024**2})
 await app.register(multipart,{limits:{fileSize:config.maxAssetBytes,files:1,fields:8}})
+void cleanupUploadTempFiles(dataRoot).catch(error=>app.log.warn({err:error},'上传临时文件清理失败'))
 const base='/api/video-editor'
 const idSchema=z.string().uuid()
 const contextSchema=z.object({expectedRevision:z.number().int().positive(),sessionId:z.string().uuid(),epoch:z.number().int().nonnegative(),idempotencyKey:z.string().min(8).max(100)})
@@ -84,8 +86,14 @@ app.post(base+'/projects/:id/lease',async(request:any)=>{
 app.post(base+'/projects/:id/assets',async(request:any)=>{
   const {value,actor}=await projectRequest(request,'upload')
   const file=await request.file();invariant(file,'请选择文件')
-  const path=resolve(dataRoot,`upload-${randomUUID()}.bin`),bytes=await file.toBuffer();await writeFile(path,bytes)
-  return publicAsset(await importAsset(value,actor,path,file.filename))
+  const path=resolve(dataRoot,`upload-${randomUUID()}.bin`)
+  try {
+    const bytes=await file.toBuffer()
+    await writeFile(path,bytes)
+    return publicAsset(await importAsset(value,actor,path,file.filename))
+  } finally {
+    await removeUploadTemp(path).catch(error=>app.log.warn({err:error},'上传临时文件删除失败'))
+  }
 })
 app.post(base+'/projects/:id/assets/import',async(request:any)=>{const {value,actor}=await projectRequest(request,'upload');return publicAsset(await importPicture(value,actor,z.string().regex(/^\d+$/).parse(request.body.pictureId)))})
 app.get(base+'/projects/:id/assets',async(request:any)=>{const {value,actor}=await projectRequest(request);return (await projectAssets(value.id,actor,value)).map(publicAsset)})
