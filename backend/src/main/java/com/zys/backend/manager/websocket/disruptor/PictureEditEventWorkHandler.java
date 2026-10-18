@@ -30,32 +30,58 @@ public class PictureEditEventWorkHandler implements WorkHandler<PictureEditEvent
 
     @Override
     public void onEvent(PictureEditEvent pictureEditEvent) throws Exception {
+        if (pictureEditEvent == null || pictureEditEvent.getSession() == null
+                || pictureEditEvent.getPictureEditRequestMessage() == null) {
+            log.warn("忽略空的图片协同事件");
+            return;
+        }
         PictureEditRequestMessage pictureEditRequestMessage = pictureEditEvent.getPictureEditRequestMessage();
         WebSocketSession session = pictureEditEvent.getSession();
         User user = pictureEditEvent.getUser();
         Long pictureId = pictureEditEvent.getPictureId();
-        // 获取到消息类别
-        String type = pictureEditRequestMessage.getType();
-        PictureEditMessageTypeEnum pictureEditMessageTypeEnum = PictureEditMessageTypeEnum.getEnumByValue(type);
-        // 根据消息类型处理消息
-        switch (pictureEditMessageTypeEnum) {
-            case ENTER_EDIT:
-                pictureEditHandler.handleEnterEditMessage(pictureEditRequestMessage, session, user, pictureId);
-                break;
-            case EXIT_EDIT:
-                pictureEditHandler.handleExitEditMessage(pictureEditRequestMessage, session, user, pictureId);
-                break;
-            case EDIT_ACTION:
-                pictureEditHandler.handleEditActionMessage(pictureEditRequestMessage, session, user, pictureId);
-                break;
-            default:
-                // 其他消息类型，返回错误提示
-                PictureEditResponseMessage pictureEditResponseMessage = new PictureEditResponseMessage();
-                pictureEditResponseMessage.setType(PictureEditMessageTypeEnum.ERROR.getValue());
-                pictureEditResponseMessage.setMessage("消息类型错误");
-                pictureEditResponseMessage.setUser(userService.getUserVO(user));
-                session.sendMessage(new TextMessage(JSONUtil.toJsonStr(pictureEditResponseMessage)));
-                break;
+        try {
+            PictureEditMessageTypeEnum pictureEditMessageTypeEnum =
+                    PictureEditMessageTypeEnum.getEnumByValue(pictureEditRequestMessage.getType());
+            if (pictureEditMessageTypeEnum == null) {
+                sendError(session, user, "消息类型错误");
+                return;
+            }
+            switch (pictureEditMessageTypeEnum) {
+                case ENTER_EDIT:
+                    pictureEditHandler.handleEnterEditMessage(pictureEditRequestMessage, session, user, pictureId);
+                    break;
+                case EXIT_EDIT:
+                    pictureEditHandler.handleExitEditMessage(pictureEditRequestMessage, session, user, pictureId);
+                    break;
+                case EDIT_ACTION:
+                    pictureEditHandler.handleEditActionMessage(pictureEditRequestMessage, session, user, pictureId);
+                    break;
+                default:
+                    sendError(session, user, "消息类型错误");
+                    break;
+            }
+        } catch (Exception e) {
+            // 单条坏消息不能让 Disruptor 消费线程退出，后续协同事件必须继续消费。
+            log.error("处理图片协同事件失败，pictureId={}，type={}", pictureId,
+                    pictureEditRequestMessage.getType(), e);
+            try {
+                sendError(session, user, "图片协同操作失败，请重试");
+            } catch (Exception sendError) {
+                log.debug("发送图片协同错误消息失败", sendError);
+            }
         }
+    }
+
+    private void sendError(WebSocketSession session, User user, String message) throws Exception {
+        if (session == null || !session.isOpen()) {
+            return;
+        }
+        PictureEditResponseMessage response = new PictureEditResponseMessage();
+        response.setType(PictureEditMessageTypeEnum.ERROR.getValue());
+        response.setMessage(message);
+        if (user != null) {
+            response.setUser(userService.getUserVO(user));
+        }
+        session.sendMessage(new TextMessage(JSONUtil.toJsonStr(response)));
     }
 }
