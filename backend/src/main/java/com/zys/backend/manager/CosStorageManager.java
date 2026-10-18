@@ -145,29 +145,37 @@ public class CosStorageManager {
         }
     }
 
-    public void deleteByUrl(String fileUrl) {
+    public boolean deleteByUrl(String fileUrl) {
         if (StrUtil.isBlank(fileUrl)) {
-            return;
+            return true;
         }
         Path legacyPath = localFileManager.resolveLocalPath(fileUrl);
         if (legacyPath != null) {
             localFileManager.deleteByUrl(fileUrl);
-            return;
+            return true;
         }
-        Settings settings = readSettings();
+        Settings settings;
+        try {
+            settings = readSettings();
+        } catch (BusinessException e) {
+            log.warn("删除腾讯云 COS 对象前配置校验失败，url={}", fileUrl);
+            return false;
+        }
         String key;
         try {
             key = extractKey(fileUrl, settings.host);
         } catch (BusinessException e) {
             log.warn("跳过不属于当前 COS 的图片地址：{}", fileUrl);
-            return;
+            return false;
         }
         COSClient client = null;
         try {
             client = createClient(settings);
             client.deleteObject(settings.bucket, key);
+            return true;
         } catch (Exception e) {
             log.warn("删除腾讯云 COS 对象失败，key={}", key, e);
+            return false;
         } finally {
             if (client != null) {
                 client.shutdown();

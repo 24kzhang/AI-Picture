@@ -21,10 +21,13 @@ import com.zys.backend.manager.vector.VectorClient;
 import com.zys.backend.manager.upload.FilePictureUpload;
 import com.zys.backend.manager.upload.PictureUploadTemplate;
 import com.zys.backend.manager.upload.UrlPictureUpload;
+import com.zys.backend.agent.service.IntegrationOutboxService;
 import com.zys.backend.mapper.PictureMapper;
+import com.zys.backend.mapper.PictureVersionMapper;
 import com.zys.backend.model.dto.file.UploadPictureResult;
 import com.zys.backend.model.dto.picture.*;
 import com.zys.backend.model.entity.Picture;
+import com.zys.backend.model.entity.PictureVersion;
 import com.zys.backend.model.entity.Space;
 import com.zys.backend.model.entity.User;
 import com.zys.backend.model.enums.PictureReviewStatusEnum;
@@ -96,6 +99,13 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
 
     @Resource
     private VectorClient vectorClient;
+
+    @Resource
+    private PictureVersionMapper pictureVersionMapper;
+
+    @Resource
+    @org.springframework.context.annotation.Lazy
+    private IntegrationOutboxService integrationOutboxService;
 
     @Resource
     private TransactionTemplate transactionTemplate;
@@ -243,39 +253,45 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
 
         // 更新空间统计信息  开启事务
         Long finalSpaceId = spaceId;
-        transactionTemplate.execute((status) -> {
-            // 插入数据
-            boolean result;
-            if (oldPicture == null) {
-                picture.setEditVersion(0L);
-                result = this.save(picture);
-            } else {
-                Long expected = pictureUploadRequest.getExpectedEditVersion();
-                picture.setUserId(oldPicture.getUserId());
-                picture.setEditVersion(expected + 1);
-                result = this.update(picture, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
-                    .eq("id", picture.getId()).eq("editVersion", expected));
-                mutationGuard.conflict(result);
-            }
-            ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片上传失败，数据库操作失败");
-            // 更新空间统计信息
-            if (finalSpaceId != null) {
-                Long oldPictureSize = oldPicture == null ? 0L : oldPicture.getPicSize();
-                int oldCountChange = oldPicture == null ? 0 : 1;
-                boolean updateResult = spaceService.lambdaUpdate()
-                        .eq(Space::getId, finalSpaceId)
-                        .apply("totalSize + {0} - {1} <= maxSize AND totalCount + {2} <= maxCount", picture.getPicSize(), oldPictureSize, oldPicture == null ? 1 : 0)
-//                        .setSql("totalSize = totalSize + ? - ?", picture.getPicSize(), oldPictureSize)
-//                        .setSql("totalCount = totalCount + ? - ?", 1, oldCountChange)
-                        .setSql("totalSize = totalSize + {0} - {1}, totalCount = totalCount + {2} - {3}",
-                                picture.getPicSize(), oldPictureSize, 1, oldCountChange)
-                        .update();
-                ThrowUtils.throwIf(!updateResult, ErrorCode.OPERATION_ERROR, "空间容量或条数不足，图片未保存");
-            }
+        try {
+            transactionTemplate.execute((status) -> {
+                // 插入数据
+                boolean result;
+                if (oldPicture == null) {
+                    picture.setEditVersion(0L);
+                    result = this.save(picture);
+                } else {
+                    Long expected = pictureUploadRequest.getExpectedEditVersion();
+                    picture.setUserId(oldPicture.getUserId());
+                    picture.setEditVersion(expected + 1);
+                    result = this.update(picture, new com.baomidou.mybatisplus.core.conditions.update.UpdateWrapper<Picture>()
+                        .eq("id", picture.getId()).eq("editVersion", expected));
+                    mutationGuard.conflict(result);
+                }
+                ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片上传失败，数据库操作失败");
+                // 更新空间统计信息
+                if (finalSpaceId != null) {
+                    Long oldPictureSize = oldPicture == null ? 0L : oldPicture.getPicSize();
+                    int oldCountChange = oldPicture == null ? 0 : 1;
+                    boolean updateResult = spaceService.lambdaUpdate()
+                            .eq(Space::getId, finalSpaceId)
+                            .apply("totalSize + {0} - {1} <= maxSize AND totalCount + {2} <= maxCount", picture.getPicSize(), oldPictureSize, oldPicture == null ? 1 : 0)
+    //                        .setSql("totalSize = totalSize + ? - ?", picture.getPicSize(), oldPictureSize)
+    //                        .setSql("totalCount = totalCount + ? - ?", 1, oldCountChange)
+                            .setSql("totalSize = totalSize + {0} - {1}, totalCount = totalCount + {2} - {3}",
+                                    picture.getPicSize(), oldPictureSize, 1, oldCountChange)
+                            .update();
+                    ThrowUtils.throwIf(!updateResult, ErrorCode.OPERATION_ERROR, "空间容量或条数不足，图片未保存");
+                }
 
-            // 提交事务
-            return picture;
-        });
+                // 提交事务
+                return picture;
+            });
+        } catch (RuntimeException | Error e) {
+            // COS 上传发生在数据库事务之前；事务回滚时新对象没有任何数据库引用，必须立即回收。
+            cleanupUploadedObjects(uploadPictureResult, "图片入库事务失败：" + StrUtil.blankToDefault(e.getMessage(), "未知原因"));
+            throw e;
+        }
 
 
         // 数据落库后同步写入 Chroma；向量服务短暂不可用时不回滚已成功的图片上传。
@@ -588,18 +604,79 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
     @Async
     @Override
     public void clearPictureFile(Picture oldPicture) {
-        // 同一文件仍被其他记录引用时不删除。
-        String pictureUrl = oldPicture.getUrl();
-        String thumbnailUrl = oldPicture.getThumbnailUrl();
-        long count = this.lambdaQuery()
-                .eq(Picture::getUrl, pictureUrl)
-                .count();
-        if (count > 1) {
+        if (oldPicture == null) {
             return;
         }
-        cosStorageManager.deleteByUrl(pictureUrl);
-        if (StrUtil.isNotBlank(thumbnailUrl)) {
-            cosStorageManager.deleteByUrl(thumbnailUrl);
+        // 原图和缩略图分别判断，当前图片记录和未删除历史版本都算引用。
+        Set<String> targets = new LinkedHashSet<>();
+        if (StrUtil.isNotBlank(oldPicture.getUrl())) {
+            targets.add(oldPicture.getUrl());
+        }
+        if (StrUtil.isNotBlank(oldPicture.getThumbnailUrl())) {
+            targets.add(oldPicture.getThumbnailUrl());
+        }
+        for (String target : targets) {
+            if (isPictureObjectReferenced(target)) {
+                continue;
+            }
+            try {
+                if (!cosStorageManager.deleteByUrl(target)) {
+                    recordOrphanCleanup(target, "图片文件引用检查后删除失败");
+                }
+            } catch (Exception e) {
+                recordOrphanCleanup(target, "图片文件删除异常：" + StrUtil.blankToDefault(e.getMessage(), "未知原因"));
+            }
+        }
+    }
+
+    private boolean isPictureObjectReferenced(String objectUrl) {
+        if (StrUtil.isBlank(objectUrl)) {
+            return false;
+        }
+        QueryWrapper<Picture> currentQuery = new QueryWrapper<>();
+        currentQuery.and(wrapper -> wrapper.eq("url", objectUrl)
+                .or()
+                .eq("thumbnailUrl", objectUrl));
+        Long currentCount = baseMapper.selectCount(currentQuery);
+        long currentReferences = currentCount == null ? 0L : currentCount;
+        if (currentReferences > 0) {
+            return true;
+        }
+        QueryWrapper<PictureVersion> versionQuery = new QueryWrapper<>();
+        versionQuery.and(wrapper -> wrapper.eq("url", objectUrl)
+                .or()
+                .eq("thumbnailUrl", objectUrl));
+        Long versionCount = pictureVersionMapper.selectCount(versionQuery);
+        return versionCount != null && versionCount > 0;
+    }
+
+    private void cleanupUploadedObjects(UploadPictureResult uploadPictureResult, String reason) {
+        if (uploadPictureResult == null) {
+            return;
+        }
+        Set<String> targets = new LinkedHashSet<>();
+        if (StrUtil.isNotBlank(uploadPictureResult.getUrl())) {
+            targets.add(uploadPictureResult.getUrl());
+        }
+        if (StrUtil.isNotBlank(uploadPictureResult.getThumbnailUrl())) {
+            targets.add(uploadPictureResult.getThumbnailUrl());
+        }
+        for (String target : targets) {
+            try {
+                if (!cosStorageManager.deleteByUrl(target)) {
+                    recordOrphanCleanup(target, reason);
+                }
+            } catch (Exception e) {
+                recordOrphanCleanup(target, reason + "：" + StrUtil.blankToDefault(e.getMessage(), "删除异常"));
+            }
+        }
+    }
+
+    private void recordOrphanCleanup(String target, String reason) {
+        try {
+            integrationOutboxService.createOrphanCleanup(target, reason);
+        } catch (Exception e) {
+            log.error("写入图片孤儿对象 Outbox 失败，target={}", target, e);
         }
     }
 
