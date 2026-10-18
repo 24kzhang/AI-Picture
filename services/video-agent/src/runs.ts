@@ -115,7 +115,7 @@ async function executeQueued(runId:string,work:()=>Promise<unknown>) {
   }
 }
 async function claimRun(id:string):Promise<{epoch:number}|undefined>{
-  const [updated]=await db.query<any>("UPDATE video_run SET status='running',worker_id=?,lease_epoch=lease_epoch+1,lease_until=DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 30 MINUTE),updated_at=UTC_TIMESTAMP(3) WHERE id=? AND status='queued' AND (worker_id IS NULL OR lease_until IS NULL OR lease_until<UTC_TIMESTAMP(3))",[workerId,id])
+  const [updated]=await db.query<any>("UPDATE video_run SET status='running',worker_id=?,lease_epoch=lease_epoch+1,lease_until=DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 30 MINUTE),updated_at=UTC_TIMESTAMP(3) WHERE id=? AND status='queued' AND (worker_id=? OR worker_id IS NULL OR lease_until IS NULL OR lease_until<UTC_TIMESTAMP(3))",[workerId,id,workerId])
   if(!updated.affectedRows)return undefined
   const record=(await rows<any>('SELECT lease_epoch FROM video_run WHERE id=? AND worker_id=?',[id,workerId]))[0]
   return record?{epoch:Number(record.lease_epoch)}:undefined
@@ -123,10 +123,13 @@ async function claimRun(id:string):Promise<{epoch:number}|undefined>{
 export async function enqueue(runId:string, work:()=>Promise<unknown>) {
   const current=await getRun(runId)
   if(current.status==='done')return
+  const [reserved]=await db.query<any>("UPDATE video_run SET worker_id=?,lease_until=DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 30 MINUTE),updated_at=UTC_TIMESTAMP(3) WHERE id=? AND status='queued' AND (worker_id=? OR worker_id IS NULL OR lease_until IS NULL OR lease_until<UTC_TIMESTAMP(3))",[workerId,runId,workerId])
+  if(!reserved.affectedRows)return
+  const reservedRow=(await rows<any>('SELECT lease_epoch FROM video_run WHERE id=? AND worker_id=?',[runId,workerId]))[0]
   const result=runQueue.enqueue({id:runId,userId:String(current.user_id),work:()=>executeQueued(runId,work)})
   if(result==='rejected'){
     const message='该用户的任务排队已满，请等待已有任务完成后重试'
-    await setStatus(runId,'error',undefined,message)
+    await setStatus(runId,'error',undefined,message,workerId,Number(reservedRow?.lease_epoch||0))
     throw new ApiError(429,'RUN_QUEUE_LIMIT',message)
   }
 }
