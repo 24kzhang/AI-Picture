@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { ApiError } from './errors.js'
 import type { Actor } from './auth.js'
 import type { WriteContext } from './projects.js'
+import { FairRunQueue } from './fair-run-queue.js'
 export const events = new EventEmitter();events.setMaxListeners(100)
 export async function event(runId: string,type: string,data: unknown) {
   const [result]=await db.query<any>('INSERT INTO video_event(run_id,type,data) VALUES (?,?,?)',[runId,type,JSON.stringify(data)])
@@ -86,16 +87,33 @@ export async function stepUpdate(runId:string,stepId:string,fields:{status:strin
     [fields.status,fields.remoteTaskId||null,fields.buildId||null,fields.result?JSON.stringify(fields.result):null,fields.error||null,runId,stepId])
   await event(runId,'step',{stepId,...fields})
 }
-let queue=Promise.resolve()
-const scheduled=new Set<string>()
-export function enqueue(runId:string, work:()=>Promise<unknown>) {
-  if(scheduled.has(runId))return
-  scheduled.add(runId)
-  queue=queue.catch(()=>{}).then(async()=>{
-    try{const current=await getRun(runId);if(current.status==='done')return;if(await cancelled(runId))return await setStatus(runId,'cancelled');await setStatus(runId,'running');const result=await work();await setStatus(runId,await cancelled(runId)?'cancelled':'done',result)}
-    catch(error){const status=error instanceof ApiError&&['SUBMISSION_UNKNOWN','REMOTE_TASK_LOST'].includes(error.code)?error.code==='SUBMISSION_UNKNOWN'?'unknown':'lost':await cancelled(runId)?'cancelled':'error';await setStatus(runId,status,undefined,error instanceof Error?error.message:String(error))}
-    finally{scheduled.delete(runId)}
-  })
+const runQueue=new FairRunQueue({
+  maxConcurrent:Math.max(1,Number(process.env.VIDEO_QUEUE_CONCURRENCY||1)),
+  maxConcurrentPerUser:Math.max(1,Number(process.env.VIDEO_USER_CONCURRENCY||1)),
+  maxQueuedPerUser:Math.max(0,Number(process.env.VIDEO_USER_QUEUE_LIMIT||4)),
+})
+async function executeQueued(runId:string,work:()=>Promise<unknown>) {
+  try{
+    const current=await getRun(runId)
+    if(current.status==='done')return
+    if(await cancelled(runId))return await setStatus(runId,'cancelled')
+    await setStatus(runId,'running')
+    const result=await work()
+    await setStatus(runId,await cancelled(runId)?'cancelled':'done',result)
+  }catch(error){
+    const status=error instanceof ApiError&&['SUBMISSION_UNKNOWN','REMOTE_TASK_LOST'].includes(error.code)?error.code==='SUBMISSION_UNKNOWN'?'unknown':'lost':await cancelled(runId)?'cancelled':'error'
+    await setStatus(runId,status,undefined,error instanceof Error?error.message:String(error))
+  }
+}
+export async function enqueue(runId:string, work:()=>Promise<unknown>) {
+  const current=await getRun(runId)
+  if(current.status==='done')return
+  const result=runQueue.enqueue({id:runId,userId:String(current.user_id),work:()=>executeQueued(runId,work)})
+  if(result==='rejected'){
+    const message='该用户的任务排队已满，请等待已有任务完成后重试'
+    await setStatus(runId,'error',undefined,message)
+    throw new ApiError(429,'RUN_QUEUE_LIMIT',message)
+  }
 }
 export async function recoverRuns() {
   // Cookies are never persisted. Reauthorization by the initiating user is required to read/model-download/COS-save again.
