@@ -76,12 +76,10 @@ public class StpInterfaceImpl implements StpInterface {
             throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "用户未登录");
         }
         Long userId = loginUser.getId();
-        // 上下文缺失时只能按当前登录账号给出最小公共读取权限，不能直接授予管理员权限。
+        // 权限校验必须绑定到可核验的空间或资源上下文；缺失上下文时拒绝授权，避免把无目标的请求当作公共图库读取。
         SpaceUserAuthContext authContext = getAuthContextByRequest();
         if (isAllFieldsNull(authContext)) {
-            return userService.isAdmin(loginUser)
-                    ? ADMIN_PERMISSIONS
-                    : Collections.singletonList(SpaceUserPermissionConstant.PICTURE_VIEW);
+            return new ArrayList<>();
         }
 
         // 只信任请求中的目标 ID，忽略请求体内可伪造的 spaceUser / space 对象和角色字段。
