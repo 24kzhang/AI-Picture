@@ -9,6 +9,7 @@ import type { Actor } from './auth.js'
 import type { WriteContext } from './projects.js'
 import { FairRunQueue } from './fair-run-queue.js'
 export const events = new EventEmitter();events.setMaxListeners(100)
+const workerId=randomUUID(), leaseMinutes=30
 export async function event(runId: string,type: string,data: unknown) {
   const [result]=await db.query<any>('INSERT INTO video_event(run_id,type,data) VALUES (?,?,?)',[runId,type,JSON.stringify(data)])
   events.emit(runId,{id:String(result.insertId),type,data})
@@ -34,8 +35,14 @@ export async function createRun(projectId:string,actor:Actor,context:WriteContex
   await event(id,'queued',{kind,revision:context.expectedRevision})
   return getRun(id)
 }
-export async function setStatus(id:string,status:string,result?:unknown,error?:string) {
-  await db.query('UPDATE video_run SET status=?,result=?,error=?,updated_at=UTC_TIMESTAMP(3) WHERE id=?',[status,result?JSON.stringify(result):null,error||null,id]);await event(id,status,{result,error})
+export async function setStatus(id:string,status:string,result?:unknown,error?:string,worker?:string,epoch?:number) {
+  const values=[status,result?JSON.stringify(result):null,error||null,id,...(worker?[worker,epoch]:[])]
+  const sql=worker
+    ? 'UPDATE video_run SET status=?,result=?,error=?,worker_id=NULL,lease_until=NULL,updated_at=UTC_TIMESTAMP(3) WHERE id=? AND worker_id=? AND lease_epoch=?'
+    : 'UPDATE video_run SET status=?,result=?,error=?,updated_at=UTC_TIMESTAMP(3) WHERE id=? AND worker_id IS NULL'
+  const [updated]=await db.query<any>(sql,values)
+  if(updated.affectedRows)await event(id,status,{result,error})
+  return updated.affectedRows===1
 }
 export async function resumeRun(id:string,actor:Actor,context:WriteContext):Promise<boolean> {
   const digest=createHash('sha256').update(JSON.stringify({action:'resume',id,userId:actor.userId,context})).digest('hex')
@@ -93,17 +100,25 @@ const runQueue=new FairRunQueue({
   maxQueuedPerUser:Math.max(0,Number(process.env.VIDEO_USER_QUEUE_LIMIT||4)),
 })
 async function executeQueued(runId:string,work:()=>Promise<unknown>) {
+  const claimed=await claimRun(runId)
+  if(!claimed)return
+  const epoch=claimed.epoch
   try{
     const current=await getRun(runId)
-    if(current.status==='done')return
-    if(await cancelled(runId))return await setStatus(runId,'cancelled')
-    await setStatus(runId,'running')
+    if(current.status==='done'){await setStatus(runId,'done',undefined,undefined,workerId,epoch);return}
+    if(await cancelled(runId)){await setStatus(runId,'cancelled',undefined,undefined,workerId,epoch);return}
     const result=await work()
-    await setStatus(runId,await cancelled(runId)?'cancelled':'done',result)
+    await setStatus(runId,await cancelled(runId)?'cancelled':'done',result,undefined,workerId,epoch)
   }catch(error){
     const status=error instanceof ApiError&&['SUBMISSION_UNKNOWN','REMOTE_TASK_LOST'].includes(error.code)?error.code==='SUBMISSION_UNKNOWN'?'unknown':'lost':await cancelled(runId)?'cancelled':'error'
-    await setStatus(runId,status,undefined,error instanceof Error?error.message:String(error))
+    await setStatus(runId,status,undefined,error instanceof Error?error.message:String(error),workerId,epoch)
   }
+}
+async function claimRun(id:string):Promise<{epoch:number}|undefined>{
+  const [updated]=await db.query<any>("UPDATE video_run SET status='running',worker_id=?,lease_epoch=lease_epoch+1,lease_until=DATE_ADD(UTC_TIMESTAMP(3),INTERVAL 30 MINUTE),updated_at=UTC_TIMESTAMP(3) WHERE id=? AND status='queued' AND (worker_id IS NULL OR lease_until IS NULL OR lease_until<UTC_TIMESTAMP(3))",[workerId,id])
+  if(!updated.affectedRows)return undefined
+  const record=(await rows<any>('SELECT lease_epoch FROM video_run WHERE id=? AND worker_id=?',[id,workerId]))[0]
+  return record?{epoch:Number(record.lease_epoch)}:undefined
 }
 export async function enqueue(runId:string, work:()=>Promise<unknown>) {
   const current=await getRun(runId)
@@ -117,9 +132,10 @@ export async function enqueue(runId:string, work:()=>Promise<unknown>) {
 }
 export async function recoverRuns() {
   // Cookies are never persisted. Reauthorization by the initiating user is required to read/model-download/COS-save again.
-  const records=await rows('SELECT id FROM video_run WHERE status IN (\'running\',\'queued\')')
-  for(const record of records)await setStatus(record.id,'awaiting_authorization',undefined,'服务重启：重新打开项目后可恢复已回执步骤；未知提交需明确重试')
+  const [result]=await db.query<any>("UPDATE video_run SET status='awaiting_authorization',error='服务重启：重新打开项目后可恢复已回执步骤；未知提交需明确重试',worker_id=NULL,lease_until=NULL,lease_epoch=lease_epoch+1,updated_at=UTC_TIMESTAMP(3) WHERE status IN ('running','queued') AND (worker_id IS NULL OR lease_until IS NULL OR lease_until<UTC_TIMESTAMP(3))")
+  for(const record of await rows('SELECT id FROM video_run WHERE status=\'awaiting_authorization\' AND error LIKE \'服务重启：%\' ORDER BY updated_at DESC LIMIT ?', [Number(result.affectedRows)||0]))await event(record.id,'awaiting_authorization',{recovered:true})
 }
+
 
 
 

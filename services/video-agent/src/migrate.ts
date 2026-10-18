@@ -10,6 +10,9 @@ export async function migrate() {
     const sql = await readFile(fileURLToPath(new URL('../migrations/'+name, import.meta.url)), 'utf8')
     for (const statement of sql.split(';').map(s => s.trim()).filter(Boolean)) await db.query(statement)
   }
+  const runColumns:Record<string,string>={worker_id:'VARCHAR(64) NULL',lease_epoch:'BIGINT NOT NULL DEFAULT 0',lease_until:'DATETIME(3) NULL'}
+  const installedRuns=new Set((await rows("SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='video_run'")).map(c=>c.name))
+  for(const [name,type] of Object.entries(runColumns))if(!installedRuns.has(name))await db.query(`ALTER TABLE video_run ADD COLUMN \`${name}\` ${type}`)
   const reviewColumns:Record<string,string>={review_source:"VARCHAR(20) NOT NULL DEFAULT 'legacy'",reviewer_name:'VARCHAR(100) NULL',reviewer_id:'BIGINT NULL',review_message:'VARCHAR(1000) NULL',review_time:'DATETIME(3) NULL',review_version:'INT NOT NULL DEFAULT 0'}
   const installed=new Set((await rows('SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=\'video_record\'')).map(c=>c.name))
   for(const [name,type] of Object.entries(reviewColumns))if(!installed.has(name))await db.query(`ALTER TABLE video_record ADD COLUMN \`${name}\` ${type}`)
