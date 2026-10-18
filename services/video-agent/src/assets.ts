@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile, stat, copyFile, unlink } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, stat, copyFile, unlink, rm } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { resolve, extname } from 'node:path'
 import { createReadStream } from 'node:fs'
@@ -48,6 +48,10 @@ async function deleteObject(actor: Actor, scope: Scope, key: string) {
 export async function importAsset(project: any, actor: Actor, input: string, name: string, purpose?: 'speech'): Promise<Asset> {
   const id = randomUUID(), directory = resolve(dataRoot, 'assets', id)
   await mkdir(directory, {recursive: true})
+  try { return await importAssetInDirectory(project, actor, input, name, purpose, id, directory) }
+  catch (error) { await rm(directory, {recursive:true, force:true}).catch(()=>{}); throw error }
+}
+async function importAssetInDirectory(project: any, actor: Actor, input: string, name: string, purpose: 'speech' | undefined, id: string, directory: string): Promise<Asset> {
   const original = resolve(directory, 'original' + (extname(name).match(/^\.[a-zA-Z0-9]{1,8}$/) ? extname(name).toLowerCase() : '.bin'))
   await copyFile(input, original)
   const size = (await stat(original)).size
