@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import base64
+import tempfile
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
@@ -247,6 +248,26 @@ def test_vector_api_upsert_and_search_scope(
         }
 
 
+def test_empty_and_oversized_uploads_return_validation_errors_and_leave_no_temp_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(main_module, "settings", make_settings(tmp_path))
+    before = {path.name for path in Path(tempfile.gettempdir()).glob("gallery-vector-*")}
+    with TestClient(main_module.app) as client:
+        empty = client.post(
+            "/vectors/upsert",
+            files={"image": ("empty.png", b"", "image/png")},
+            data={"pictureId": "41", "spaceId": "0"},
+        )
+        assert empty.status_code == 422
+        oversized = client.post(
+            "/vectors/upsert",
+            files={"image": ("large.bin", b"x" * (2 * 1024 * 1024 + 1), "application/octet-stream")},
+            data={"pictureId": "42", "spaceId": "0"},
+        )
+        assert oversized.status_code == 413
+    after = {path.name for path in Path(tempfile.gettempdir()).glob("gallery-vector-*")}
+    assert after == before
 def test_vector_duplicate_api_returns_structured_scan_limit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -186,20 +187,23 @@ async def duplicate_vectors(request: DuplicateVectorsRequest) -> dict[str, objec
 async def _save_upload(upload: UploadFile) -> Path:
     suffix = Path(upload.filename or "image.jpg").suffix or ".jpg"
     max_bytes = settings.request_limit_mb * 1024 * 1024
-    with tempfile.NamedTemporaryFile(
-        prefix="gallery-vector-", suffix=suffix, delete=False
-    ) as handle:
-        total = 0
-        while chunk := await upload.read(1024 * 1024):
-            total += len(chunk)
-            if total > max_bytes:
-                Path(handle.name).unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail="图片文件过大")
-            handle.write(chunk)
+    fd, name = tempfile.mkstemp(prefix="gallery-vector-", suffix=suffix)
+    os.close(fd)
+    path = Path(name)
+    try:
+        with path.open("wb") as handle:
+            total = 0
+            while chunk := await upload.read(1024 * 1024):
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail="图片文件过大")
+                handle.write(chunk)
         if total == 0:
-            Path(handle.name).unlink(missing_ok=True)
             raise HTTPException(status_code=422, detail="图片文件为空")
-        return Path(handle.name)
+        return path
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _parse_space_ids(value: str) -> list[int]:
