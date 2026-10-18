@@ -60,6 +60,19 @@ import java.util.stream.Collectors;
 @Slf4j
 @Service
 public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> implements PictureService {
+    private static final Map<String, String> SORT_COLUMNS = new HashMap<>();
+
+    static {
+        SORT_COLUMNS.put("id", "id");
+        SORT_COLUMNS.put("name", "name");
+        SORT_COLUMNS.put("createTime", "createTime");
+        SORT_COLUMNS.put("editTime", "editTime");
+        SORT_COLUMNS.put("updateTime", "updateTime");
+        SORT_COLUMNS.put("picSize", "picSize");
+        SORT_COLUMNS.put("picWidth", "picWidth");
+        SORT_COLUMNS.put("picHeight", "picHeight");
+        SORT_COLUMNS.put("reviewTime", "reviewTime");
+    }
     @Resource private com.zys.backend.service.MutationGuard mutationGuard;
     @Resource
     @org.springframework.context.annotation.Lazy
@@ -350,8 +363,21 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
                 queryWrapper.like("tags", "\"" + tag + "\"");
             }
         }
-        // 排序
-        queryWrapper.orderBy(StrUtil.isNotEmpty(sortField), sortOrder.equals("ascend"), sortField);
+        // 排序字段来自请求，必须映射到固定列名，不能直接拼接 SQL。
+        if (StrUtil.isNotBlank(sortField)) {
+            String column = SORT_COLUMNS.get(sortField);
+            ThrowUtils.throwIf(column == null, ErrorCode.PARAMS_ERROR, "不支持的图片排序字段");
+            boolean ascending;
+            if (StrUtil.isBlank(sortOrder) || "descend".equalsIgnoreCase(sortOrder)
+                    || "desc".equalsIgnoreCase(sortOrder)) {
+                ascending = false;
+            } else if ("ascend".equalsIgnoreCase(sortOrder) || "asc".equalsIgnoreCase(sortOrder)) {
+                ascending = true;
+            } else {
+                throw new BusinessException(ErrorCode.PARAMS_ERROR, "不支持的图片排序方向");
+            }
+            queryWrapper.orderBy(true, ascending, column);
+        }
         return queryWrapper;
     }
 
