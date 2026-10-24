@@ -36,6 +36,7 @@ public class PictureGenerationService implements ApplicationRunner {
     @Resource private UserService users;
     @Resource private PictureService pictures;
     private final ThreadPoolExecutor executor=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(16),r->{Thread t=new Thread(r,"gallery-image-generation");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
+    private final ScheduledExecutorService retryScheduler = Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"gallery-image-generation-retry");t.setDaemon(true);return t;});
     private final String workerId = UUID.randomUUID().toString();
     private static final int LEASE_MINUTES = 30;
     @Override public void run(ApplicationArguments args) {
@@ -45,7 +46,7 @@ public class PictureGenerationService implements ApplicationRunner {
         addColumnIfMissing("lease_until TIMESTAMP NULL");
         jdbc.update("UPDATE picture_generation_task SET status='UNKNOWN',error_message='服务中断，生成结果未知；请明确重新生成，不会自动重复推理',worker_id=NULL,lease_until=NULL,lease_epoch=lease_epoch+1 WHERE status='RUNNING' AND (lease_until IS NULL OR lease_until < CURRENT_TIMESTAMP)");
         jdbc.update("UPDATE picture_generation_task SET status='OUTPUT_PENDING',error_message='生图完成，转存被中断，可重试转存',worker_id=NULL,lease_until=NULL,lease_epoch=lease_epoch+1 WHERE status='TRANSFER' AND (lease_until IS NULL OR lease_until < CURRENT_TIMESTAMP)");
-        for(Map<String,Object> row:jdbc.queryForList("SELECT id FROM picture_generation_task WHERE status='QUEUED' ORDER BY create_time")) dispatch(String.valueOf(row.get("id")),false);
+        for(Map<String,Object> row:jdbc.queryForList("SELECT id FROM picture_generation_task WHERE status='QUEUED' ORDER BY create_time LIMIT 16")) dispatch(String.valueOf(row.get("id")),false);
     }
     private void addColumnIfMissing(String definition) { try { jdbc.execute("ALTER TABLE picture_generation_task ADD COLUMN " + definition); } catch (Exception ignored) { } }
     private BusinessException fail(String text){return new BusinessException(ErrorCode.OPERATION_ERROR,text);}
@@ -97,7 +98,10 @@ public class PictureGenerationService implements ApplicationRunner {
     }
     private Map<String,Object> replay(Map<String,Object> row,String digest){if(!Objects.equals(row.get("digest"),digest))throw fail("幂等键已用于其他生图请求");return view(row);}
     private void dispatch(String id,boolean transfer) {
-        try{executor.execute(()->execute(id,transfer));}catch(RejectedExecutionException e){jdbc.update("UPDATE picture_generation_task SET status=?,error_message='生图队列已满，请稍后重试' WHERE id=?",transfer?"OUTPUT_PENDING":"FAILED",id);}
+        try{executor.execute(()->execute(id,transfer));}
+        catch(RejectedExecutionException e){
+            retryScheduler.schedule(() -> dispatch(id, transfer), 1, TimeUnit.SECONDS);
+        }
     }
     private boolean claim(String id, boolean transfer) {
         String from = transfer ? "OUTPUT_PENDING" : "QUEUED";
@@ -147,5 +151,5 @@ public class PictureGenerationService implements ApplicationRunner {
             jdbc.update("UPDATE picture_generation_task SET saved_picture_id=? WHERE id=?",picture.getId(),id);return picture;
         });
     }
-    @PreDestroy public void stop(){executor.shutdownNow();}
+    @PreDestroy public void stop(){executor.shutdownNow();retryScheduler.shutdownNow();}
 }

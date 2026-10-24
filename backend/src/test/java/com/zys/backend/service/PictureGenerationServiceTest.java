@@ -52,4 +52,10 @@ class PictureGenerationServiceTest {
         verify(jdbc).update(eq("UPDATE picture_generation_task SET status=?,error_message=?,worker_id=NULL,lease_until=NULL WHERE id=? AND worker_id=? AND lease_epoch=?"),eq("OUTPUT_PENDING"),contains("可重试转存"),eq("task"),anyString(),eq(1L));
         ReflectionTestUtils.invokeMethod(service,"execute","task",true);verify(provider,times(1)).generate(anyString(),anyInt(),anyInt());verify(provider,times(2)).download(anyString());
     }
+    @Test void fullExecutorKeepsTaskQueuedForRetry(){
+        doThrow(new java.util.concurrent.RejectedExecutionException()).when(executor).execute(any());
+        ReflectionTestUtils.invokeMethod(service,"dispatch","task",false);
+        verify(jdbc,never()).update(contains("status=?"),eq("FAILED"),eq("task"));
+        service.stop();
+    }
 }
