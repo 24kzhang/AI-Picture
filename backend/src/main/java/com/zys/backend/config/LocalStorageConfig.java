@@ -10,7 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * 将本地图片仓库映射为只读静态资源。
+ * 初始化本地图片仓库；文件读取由受控接口完成。
  */
 @Configuration
 public class LocalStorageConfig implements WebMvcConfigurer {
