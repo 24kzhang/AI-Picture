@@ -298,7 +298,8 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
         try {
             vectorClient.upsert(picture);
         } catch (BusinessException e) {
-            log.warn("图片上传成功，但向量索引暂未生成，pictureId={}，可稍后由管理员重建索引", picture.getId(), e);
+            integrationOutboxService.createVectorRebuild(picture.getId());
+            log.warn("图片上传成功，但向量索引暂未生成，已写入持久补偿事件，pictureId={}", picture.getId(), e);
         }
 
         // 清理旧图片文件
@@ -714,7 +715,12 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture> impl
             return true;
         });
         // 删除 Chroma 中对应的向量记录。
-        vectorClient.delete(pictureId);
+        try {
+            vectorClient.deleteStrict(pictureId);
+        } catch (BusinessException e) {
+            integrationOutboxService.createVectorRebuild(pictureId);
+            log.warn("图片删除后向量清理失败，已写入持久补偿事件，pictureId={}", pictureId, e);
+        }
         // 异步清理文件
         this.clearPictureFile(oldPicture);
     }

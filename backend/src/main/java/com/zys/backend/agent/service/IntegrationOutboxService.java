@@ -195,7 +195,7 @@ public class IntegrationOutboxService {
                 }
                 Picture picture = pictureMapper.selectById(pictureId);
                 if (picture == null) {
-                    vectorClient.delete(pictureId);
+                    vectorClient.deleteStrict(pictureId);
                     return;
                 }
                 if (!vectorClient.isAvailable()) {

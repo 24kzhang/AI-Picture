@@ -105,16 +105,18 @@ public class VectorClient {
     }
 
     public void delete(long pictureId) {
+        try { deleteStrict(pictureId); }
+        catch (BusinessException e) { log.warn("删除图片向量失败，pictureId={}", pictureId, e); }
+    }
+
+    public void deleteStrict(long pictureId) {
         if (!enabled) {
             return;
         }
         Map<String, Object> body = new HashMap<>();
         body.put("pictureId", pictureId);
-        try {
-            restTemplate.postForEntity(serviceUrl + "/vectors/delete", body, Map.class);
-        } catch (RestClientException e) {
-            log.warn("删除图片向量失败，pictureId={}", pictureId, e);
-        }
+        try { restTemplate.postForEntity(serviceUrl + "/vectors/delete", body, Map.class); }
+        catch (RestClientException e) { throw new BusinessException(ErrorCode.OPERATION_ERROR, "删除图片向量失败"); }
     }
 
     public VectorDuplicateResponse findDuplicates(double threshold) {
