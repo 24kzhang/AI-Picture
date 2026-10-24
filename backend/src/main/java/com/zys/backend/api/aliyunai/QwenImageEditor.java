@@ -17,14 +17,16 @@ import com.zys.backend.exception.BusinessException;
 import com.zys.backend.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import javax.annotation.PreDestroy;
+import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.util.Collections;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -48,14 +50,24 @@ public class QwenImageEditor {
 
     private final Cache<String, GetOutPaintingTaskResponse> tasks = Caffeine.newBuilder()
             .maximumSize(128).expireAfterWrite(24, TimeUnit.HOURS).build();
-    /** 任务归属只用于轮询鉴权，和状态缓存同生命周期。 */
-    private final Map<String, Long> taskOwners = new ConcurrentHashMap<>();
+    /** 任务元数据与状态使用同样的上限和过期策略，避免归属缓存无界增长。 */
+    private final Cache<String, TaskMeta> metadata = Caffeine.newBuilder()
+            .maximumSize(128).expireAfterWrite(24, TimeUnit.HOURS).build();
+    @Resource
+    private JdbcTemplate jdbc;
     private final ThreadPoolExecutor executor = new ThreadPoolExecutor(2, 2, 0L,
             TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(16), runnable -> {
                 Thread thread = new Thread(runnable, "qwen-image-edit");
                 thread.setDaemon(true);
                 return thread;
             }, new ThreadPoolExecutor.AbortPolicy());
+
+    @PostConstruct
+    public void init() {
+        if (jdbc != null) {
+            jdbc.execute("CREATE TABLE IF NOT EXISTS ai_image_edit_task (task_id VARCHAR(80) PRIMARY KEY, owner_id BIGINT NULL, source_url VARCHAR(1024) NULL, status VARCHAR(24) NOT NULL, result_url VARCHAR(1024) NULL, request_id VARCHAR(120) NULL, message VARCHAR(300) NULL, create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, INDEX idx_ai_task_result(result_url)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+        }
+    }
 
     public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt) {
         return submit(imageUrl, prompt, null);
@@ -71,7 +83,7 @@ public class QwenImageEditor {
 
     public CreateOutPaintingTaskResponse submit(String imageUrl, String prompt, byte[] mask,
                                                 boolean keepAlpha, Long ownerId) {
-        return submitTask(taskId -> generate(taskId, imageUrl, prompt, mask, keepAlpha), ownerId);
+        return submitTask(taskId -> generate(taskId, imageUrl, prompt, mask, keepAlpha), ownerId, imageUrl);
     }
 
     public CreateOutPaintingTaskResponse submitOutpaint(String imageUrl, String prompt,
@@ -82,22 +94,26 @@ public class QwenImageEditor {
     public CreateOutPaintingTaskResponse submitOutpaint(String imageUrl, String prompt,
                                                          CreateOutPaintingTaskRequest.Parameters parameters,
                                                          Long ownerId) {
-        return submitTask(taskId -> generateOutpaint(taskId, imageUrl, prompt, parameters), ownerId);
+        return submitTask(taskId -> generateOutpaint(taskId, imageUrl, prompt, parameters), ownerId, imageUrl);
     }
 
     private CreateOutPaintingTaskResponse submitTask(Consumer<String> action) {
-        return submitTask(action, null);
+        return submitTask(action, null, null);
     }
 
     private CreateOutPaintingTaskResponse submitTask(Consumer<String> action, Long ownerId) {
+        return submitTask(action, ownerId, null);
+    }
+
+    private CreateOutPaintingTaskResponse submitTask(Consumer<String> action, Long ownerId, String sourceUrl) {
         String taskId = TASK_PREFIX + UUID.randomUUID();
-        tasks.put(taskId, state(taskId, "PENDING"));
-        if (ownerId != null) taskOwners.put(taskId, ownerId);
+        metadata.put(taskId, new TaskMeta(ownerId, sourceUrl));
+        putState(taskId, state(taskId, "PENDING"));
         try {
             executor.execute(() -> action.accept(taskId));
         } catch (RejectedExecutionException e) {
             tasks.invalidate(taskId);
-            taskOwners.remove(taskId);
+            metadata.invalidate(taskId);
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "AI 编辑任务较多，请稍后重试");
         }
         CreateOutPaintingTaskResponse response = new CreateOutPaintingTaskResponse();
@@ -118,13 +134,21 @@ public class QwenImageEditor {
         if (response != null) {
             return response;
         }
+        if (jdbc != null) {
+            try {
+                return fromRow(jdbc.queryForMap("SELECT * FROM ai_image_edit_task WHERE task_id=?", taskId));
+            } catch (Exception ignored) {
+                // 查询不到时按未知任务处理，避免泄露数据库错误。
+            }
+        }
         response = state(taskId, "UNKNOWN");
         response.getOutput().setMessage("任务已过期或服务已重启，请重新生成");
         return response;
     }
 
     public GetOutPaintingTaskResponse getTask(String taskId, Long ownerId) {
-        Long taskOwner = taskOwners.get(taskId);
+        TaskMeta meta = metadata.getIfPresent(taskId);
+        Long taskOwner = meta == null ? ownerFromDatabase(taskId) : meta.ownerId;
         if (taskOwner != null && !taskOwner.equals(ownerId)) {
             GetOutPaintingTaskResponse response = state(taskId, "UNKNOWN");
             response.getOutput().setMessage("任务不存在或无权访问");
@@ -143,8 +167,17 @@ public class QwenImageEditor {
                 && url.equals(task.getOutput().getOutputImageUrl()));
     }
 
+    public boolean isGeneratedOutputUrl(String url, Long ownerId, String sourceUrl) {
+        if (StrUtil.isBlank(url) || ownerId == null || jdbc == null) return false;
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT owner_id,source_url,status FROM ai_image_edit_task WHERE result_url=?", url);
+        return rows.stream().anyMatch(row -> ownerId.equals(row.get("owner_id"))
+                && "SUCCEEDED".equals(row.get("status"))
+                && StrUtil.equals(sourceUrl, (String) row.get("source_url")));
+    }
+
     private void generate(String taskId, String imageUrl, String prompt, byte[] mask, boolean keepAlpha) {
-        tasks.put(taskId, state(taskId, "RUNNING"));
+        putState(taskId, state(taskId, "RUNNING"));
         try {
             byte[] source = downloadSource(imageUrl);
             generateFromBytes(taskId, source, prompt, mask, keepAlpha);
@@ -156,7 +189,7 @@ public class QwenImageEditor {
 
     private void generateOutpaint(String taskId, String imageUrl, String prompt,
                                   CreateOutPaintingTaskRequest.Parameters parameters) {
-        tasks.put(taskId, state(taskId, "RUNNING"));
+        putState(taskId, state(taskId, "RUNNING"));
         try {
             byte[] source = downloadSource(imageUrl);
             java.awt.image.BufferedImage image = AgentImageOps.read(source);
@@ -227,7 +260,7 @@ public class QwenImageEditor {
                 response.getOutput().setResults(Collections.singletonList(image));
                 response.getOutput().setOutputImageUrl(url);
                 response.setRequestId(result.getStr("id"));
-                tasks.put(taskId, response);
+                putState(taskId, response);
             }
         } catch (Exception e) {
             log.warn("千问编辑请求未完成，异常类型={}", e.getClass().getSimpleName());
@@ -247,12 +280,45 @@ public class QwenImageEditor {
     private void fail(String taskId, String message) {
         GetOutPaintingTaskResponse response = state(taskId, "FAILED");
         response.getOutput().setMessage(message);
+        putState(taskId, response);
+    }
+
+    private void putState(String taskId, GetOutPaintingTaskResponse response) {
         tasks.put(taskId, response);
+        if (jdbc == null) return;
+        TaskMeta meta = metadata.getIfPresent(taskId);
+        jdbc.update("INSERT INTO ai_image_edit_task(task_id,owner_id,source_url,status,result_url,request_id,message) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE status=VALUES(status),result_url=VALUES(result_url),request_id=VALUES(request_id),message=VALUES(message),source_url=COALESCE(VALUES(source_url),source_url)",
+                taskId, meta == null ? null : meta.ownerId, meta == null ? null : meta.sourceUrl,
+                response.getOutput() == null ? "UNKNOWN" : response.getOutput().getTaskStatus(),
+                response.getOutput() == null ? null : response.getOutput().getOutputImageUrl(), response.getRequestId(),
+                response.getOutput() == null ? null : response.getOutput().getMessage());
+    }
+
+    private Long ownerFromDatabase(String taskId) {
+        if (jdbc == null) return null;
+        try { return jdbc.queryForObject("SELECT owner_id FROM ai_image_edit_task WHERE task_id=?", Long.class, taskId); }
+        catch (Exception ignored) { return null; }
+    }
+
+    private GetOutPaintingTaskResponse fromRow(Map<String, Object> row) {
+        String taskId = String.valueOf(row.get("task_id"));
+        GetOutPaintingTaskResponse response = state(taskId, String.valueOf(row.get("status")));
+        response.getOutput().setOutputImageUrl((String) row.get("result_url"));
+        response.getOutput().setMessage((String) row.get("message"));
+        response.setRequestId((String) row.get("request_id"));
+        metadata.put(taskId, new TaskMeta(row.get("owner_id") == null ? null : ((Number) row.get("owner_id")).longValue(), (String) row.get("source_url")));
+        return response;
+    }
+
+    private static class TaskMeta {
+        private final Long ownerId;
+        private final String sourceUrl;
+        private TaskMeta(Long ownerId, String sourceUrl) { this.ownerId = ownerId; this.sourceUrl = sourceUrl; }
     }
 
     @PreDestroy
     public void close() {
         executor.shutdownNow();
-        taskOwners.clear();
+        metadata.invalidateAll();
     }
 }

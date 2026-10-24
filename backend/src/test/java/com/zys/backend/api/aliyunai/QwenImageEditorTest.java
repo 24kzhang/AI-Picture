@@ -11,8 +11,11 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.Scanner;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 /** 只连接本机模拟服务，验证千问协议适配，不消耗模型额度。 */
 class QwenImageEditorTest {
@@ -127,5 +130,16 @@ class QwenImageEditorTest {
         assertEquals("UNKNOWN", result.getOutput().getTaskStatus());
         assertEquals("任务不存在或无权访问", result.getOutput().getMessage());
         assertEquals("PENDING", editor.getTask(id, 10L).getOutput().getTaskStatus());
+    }
+
+    @Test
+    void generatedOutputRequiresOwnerAndSourcePicture() {
+        @SuppressWarnings("unchecked") org.springframework.jdbc.core.JdbcTemplate jdbc = mock(org.springframework.jdbc.core.JdbcTemplate.class);
+        ReflectionTestUtils.setField(editor, "jdbc", jdbc);
+        when(jdbc.queryForList(anyString(), eq("https://model/output.png"))).thenReturn(List.of(
+                Map.of("owner_id", 10L, "source_url", "https://gallery/source.png", "status", "SUCCEEDED")));
+        assertTrue(editor.isGeneratedOutputUrl("https://model/output.png", 10L, "https://gallery/source.png"));
+        assertFalse(editor.isGeneratedOutputUrl("https://model/output.png", 11L, "https://gallery/source.png"));
+        assertFalse(editor.isGeneratedOutputUrl("https://model/output.png", 10L, "https://gallery/other.png"));
     }
 }

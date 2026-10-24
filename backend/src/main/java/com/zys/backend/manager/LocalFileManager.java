@@ -99,6 +99,23 @@ public class LocalFileManager {
         }
     }
 
+    public Path resolveLocalPathByRelative(String relative) {
+        if (relative == null || relative.isBlank() || relative.contains("..")) return null;
+        try {
+            Path root = getStorageRoot();
+            Path resolved = root.resolve(relative.replace('/', File.separatorChar)).normalize();
+            ensureInsideRoot(resolved, root);
+            return Files.isRegularFile(resolved) ? resolved : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public String publicUrl(String relative) {
+        String base = publicBaseUrl.endsWith("/") ? publicBaseUrl.substring(0, publicBaseUrl.length() - 1) : publicBaseUrl;
+        return base + "/" + relative.replace('\\', '/');
+    }
+
     public void deleteByUrl(String fileUrl) {
         Path path = resolveLocalPath(fileUrl);
         if (path != null) {

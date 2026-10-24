@@ -73,7 +73,8 @@ public class PictureController {
         if (StrUtil.isBlank(url) || url.equals(picture.getUrl())) {
             bytes = agentStorageService.load(picture.getUrl());
         } else {
-            ThrowUtils.throwIf(!qwenImageEditor.isGeneratedOutputUrl(url),
+            User loginUser = userService.getLoginUser(request);
+            ThrowUtils.throwIf(!qwenImageEditor.isGeneratedOutputUrl(url, loginUser.getId(), picture.getUrl()),
                     ErrorCode.PARAMS_ERROR, "只能读取当前图片或有效的 AI 生成结果");
             try (HttpResponse response = HttpRequest.get(url).timeout(30000).execute()) {
                 ThrowUtils.throwIf(!response.isOk(), ErrorCode.OPERATION_ERROR, "读取 AI 结果失败");
