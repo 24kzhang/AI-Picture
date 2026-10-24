@@ -8,5 +8,5 @@ CREATE TABLE IF NOT EXISTS ai_image_edit_task (
     message VARCHAR(300) NULL,
     create_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_ai_task_result (result_url)
+    INDEX idx_ai_task_result (result_url(512))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
