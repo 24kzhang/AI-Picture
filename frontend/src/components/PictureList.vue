@@ -13,7 +13,7 @@
             <template #cover>
               <img
                 :alt="picture.name"
-                :src="picture.thumbnailUrl ?? picture.url"
+                :src="galleryImageUrl(picture.thumbnailUrl ?? picture.url)"
                 style="height: 180px; object-fit: cover"
               />
             </template>
@@ -57,6 +57,7 @@ import { message } from 'ant-design-vue'
 // import ShareModal from '@/components/ShareModal.vue'
 import { ref } from 'vue'
 import ShareModal from '@/components/ShareModal.vue'
+import { galleryImageUrl } from '@/utils/galleryImageUrl'
 
 interface Props {
   dataList?: API.PictureVO[]
