@@ -6,7 +6,7 @@
         <router-link to="/">
           <div class="title-bar">
             <span class="logo" aria-hidden="true"><CloudOutlined /></span>
-            <div class="title">AI协同云图库</div>
+            <div class="title">AI协同云影库</div>
           </div>
         </router-link>
       </a-col>

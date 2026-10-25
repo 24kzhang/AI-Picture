@@ -1,7 +1,7 @@
 <template>
   <div id="userRegisterPage">
-    <h2 class="title">AI协同云图库 - 用户注册</h2>
-    <div class="desc">AI协同云图库</div>
+    <h2 class="title">AI协同云影库 - 用户注册</h2>
+    <div class="desc">AI协同云影库</div>
     <a-form :model="formState" name="basic" autocomplete="off" @finish="handleSubmit">
       <!-- 用户账号 -->
       <a-form-item name="userAccount" :rules="[{ required: true, message: '请输入账号' }]">

@@ -1,6 +1,6 @@
 <template>
   <div id="userLoginPage">
-    <h2 class="title">AI协同云图库 - 用户登录</h2>
+    <h2 class="title">AI协同云影库 - 用户登录</h2>
     <div class="desc">AI协同云图</div>
     <a-form :model="formState" name="basic" autocomplete="off" @finish="handleSubmit">
       <!-- 用户账号 -->

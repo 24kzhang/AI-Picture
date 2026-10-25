@@ -45,7 +45,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(
-    title="AI 协同云图库服务器向量服务",
+    title="AI 协同云影库服务器向量服务",
     version="3.0.0",
     lifespan=lifespan,
 )
@@ -66,7 +66,7 @@ class DuplicateVectorsRequest(BaseModel):
 @app.get("/")
 def service_info() -> dict[str, object]:
     return {
-        "service": "AI 协同云图库向量服务",
+        "service": "AI 协同云影库向量服务",
         "status": "running",
         "health": "/health",
         "docs": "/docs",

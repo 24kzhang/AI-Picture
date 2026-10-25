@@ -1,7 +1,7 @@
 <template>
   <main class="hypit-workbench">
     <header class="workbench-header">
-      <div class="heading"><router-link to="/?media=video">← 云图库</router-link><div><span class="eyebrow">HYPIT · 0.2.16</span><h1>{{ project?.name || '完整视频工程' }}</h1></div><span class="revision">v{{ revision }}</span></div>
+      <div class="heading"><router-link to="/?media=video">← 云影库</router-link><div><span class="eyebrow">HYPIT · 0.2.16</span><h1>{{ project?.name || '完整视频工程' }}</h1></div><span class="revision">v{{ revision }}</span></div>
       <div class="actions"><span class="status">{{ busy ? '正在处理…' : dirty ? '源文件尚未保存' : lease ? '已保存 · 持有编辑权' : '只读查看' }}</span><button v-if="!lease" :disabled="busy" @click="acquire">获取编辑权</button><template v-else><button :disabled="busy" @click="handoffOpen=true">交接</button><button :disabled="busy" @click="release">释放</button></template><button v-if="mode==='timeline'" :disabled="!lease||busy" @click="applyTemplate('current')">开启完整工程</button><button class="primary" :disabled="!lease||busy||dirty" @click="exportProject">构建 / 导出</button></div>
     </header>
     <a-alert v-if="error" :message="error" type="error" show-icon closable @close="error=''"/>

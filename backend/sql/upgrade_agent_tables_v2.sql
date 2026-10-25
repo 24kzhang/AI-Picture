@@ -1,4 +1,4 @@
--- 云图库 Java Agent 存量库兼容升级（MySQL 5.7）
+-- 云影库 Java Agent 存量库兼容升级（MySQL 5.7）
 -- 目标：将旧版 Agent 表补齐到当前实体所需字段；不删除、不重命名旧列。
 -- 可重复执行。执行前请先备份 cloud_gallery 数据库。
 USE `cloud_gallery`;

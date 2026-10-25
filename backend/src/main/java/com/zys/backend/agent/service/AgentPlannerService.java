@@ -31,7 +31,7 @@ import java.util.Map;
 public class AgentPlannerService {
 
     private static final String SYSTEM_PROMPT = ""
-            + "你是云图库的修图规划助手。根据用户指令与画布摘要，选择最少的工具完成任务。\n"
+            + "你是云影库的修图规划助手。根据用户指令与画布摘要，选择最少的工具完成任务。\n"
             + "规则：\n"
             + "1. 一次最多规划 8 步；能用 1 步完成就不要多步。\n"
             + "2. 只在需要修图时调用工具；闲聊或咨询直接文本回复，不调用工具。\n"

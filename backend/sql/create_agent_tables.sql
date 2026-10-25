@@ -1,4 +1,4 @@
--- AI 协同云图库：Java 原生修图 Agent 相关表结构
+-- AI 协同云影库：Java 原生修图 Agent 相关表结构
 -- 适用于已有 cloud_gallery 库的增量升级；全新建库请先执行 create_table.sql。
 USE `cloud_gallery`;
 

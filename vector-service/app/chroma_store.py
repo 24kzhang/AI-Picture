@@ -45,7 +45,7 @@ class ChromaStore:
                 "hnsw:space": "cosine",
                 "hnsw:batch_size": 100,
                 "hnsw:sync_threshold": 100,
-                "description": "AI 协同云图库图片向量",
+                "description": "AI 协同云影库图片向量",
             },
         )
         self._retain_embedding_log(data_path)

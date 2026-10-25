@@ -61,7 +61,7 @@ def test_service_info_routes() -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert response.json() == {
-        "service": "AI 协同云图库向量服务",
+        "service": "AI 协同云影库向量服务",
         "status": "running",
         "health": "/health",
         "docs": "/docs",

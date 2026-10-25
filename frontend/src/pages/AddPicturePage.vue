@@ -6,6 +6,9 @@
     <a-typography-paragraph v-if="spaceId" type="secondary">
       保存至空间：<a :href="`/space/${spaceId}`" target="_blank">{{ spaceId }}</a>
     </a-typography-paragraph>
+    <a-form-item v-if="!route.query.id" label="保存位置">
+      <a-select :value="spaceId ?? 'public'" :options="destinationOptions" :disabled="!!picture" style="width: 100%" @change="changeDestination" />
+    </a-form-item>
 
     <!--    选择上传方式-->
     <a-tabs v-model:activeKey="uploadType">
@@ -16,6 +19,9 @@
       <a-tab-pane key="url" tab="URL 上传" force-render>
         <!-- URL 图片上传组件 -->
         <UrlPictureUpload :picture="picture" :spaceId="spaceId" :onSuccess="onSuccess" />
+      </a-tab-pane>
+      <a-tab-pane v-if="!route.query.id" key="ai" tab="AI 生成">
+        <PictureGeneration :space-id="spaceId" :on-success="onSuccess" />
       </a-tab-pane>
     </a-tabs>
     <!-- 图片编辑 -->
@@ -101,7 +107,7 @@
 
 <script setup lang="ts">
 import PictureUpload from '@/components/PictureUpload.vue'
-import { computed, h, onMounted, reactive, ref, watchEffect } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch, watchEffect } from 'vue'
 import {
   editPictureUsingPost,
   getPictureVoByIdUsingGet,
@@ -112,14 +118,34 @@ import { useRoute, useRouter } from 'vue-router'
 import UrlPictureUpload from '@/components/UrlPictureUpload.vue'
 import ImageCropper from '@/components/ImageCropper.vue'
 import { EditOutlined, FullscreenOutlined } from '@ant-design/icons-vue'
-import { getSpaceVoByIdUsingGet } from '@/api/spaceController.ts'
+import { getSpaceVoByIdUsingGet, listSpaceVoByPageUsingPost } from '@/api/spaceController.ts'
+import { listMyTeamSpaceUsingPost } from '@/api/spaceUserController'
+import { useLoginUserStore } from '@/stores/useLoginUserStore'
 import ImageOutPainting from '@/components/ImageOutPainting.vue'
+import PictureGeneration from '@/components/PictureGeneration.vue'
 
 const router = useRouter()
 const route = useRoute()
 const picture = ref<API.PictureVO>()
 const pictureForm = reactive<API.PictureEditRequest>({})
-const uploadType = ref<'file' | 'url'>('file')
+const uploadType = ref<'file' | 'url' | 'ai'>(route.query.source === 'ai' ? 'ai' : 'file')
+const loginUser = useLoginUserStore()
+const destinationOptions = ref<Array<{ label: string; value: string }>>([{ label: '公共图库', value: 'public' }])
+async function loadDestinations() {
+  if (!loginUser.loginUser.id) return
+  const results = await Promise.allSettled([listSpaceVoByPageUsingPost({ userId: loginUser.loginUser.id, spaceType: 0, current: 1, pageSize: 20 }), listMyTeamSpaceUsingPost()])
+  const options = [{ label: '公共图库', value: 'public' }]
+  const personal = results[0]
+  if (personal.status === 'fulfilled' && personal.value.data.code === 0) for (const item of personal.value.data.data?.records ?? []) options.push({ label: item.spaceName || '个人空间', value: String(item.id) })
+  const teams = results[1]
+  if (teams.status === 'fulfilled' && teams.value.data.code === 0) for (const item of teams.value.data.data ?? []) if (item.spaceRole !== 'viewer' && item.space) options.push({ label: item.space.spaceName || '团队空间', value: String(item.spaceId) })
+  if (spaceId.value && !options.some((option) => option.value === spaceId.value)) options.push({ label: space.value?.spaceName || `当前空间 ${spaceId.value}`, value: spaceId.value })
+  destinationOptions.value = options
+}
+function changeDestination(value: string) {
+  if (picture.value) return
+  router.replace({ path: '/add_picture', query: { ...route.query, spaceId: value === 'public' ? undefined : value } })
+}
 
 // 空间 id
 const spaceId = computed<string | undefined>(() => {
@@ -255,9 +281,11 @@ const doEditPicture = async () => {
 watchEffect(() => {
   fetchSpace()
 })
+watch(() => loginUser.loginUser.id, () => { void loadDestinations() })
 onMounted(() => {
   getTagCategoryOptions()
   getOldPicture()
+  void loadDestinations()
 })
 </script>
 

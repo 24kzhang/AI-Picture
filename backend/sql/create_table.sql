@@ -1,4 +1,4 @@
--- AI 协同云图库：全新本地数据库结构
+-- AI 协同云影库：全新本地数据库结构
 CREATE DATABASE IF NOT EXISTS `cloud_gallery`
     DEFAULT CHARACTER SET utf8mb4
     COLLATE utf8mb4_unicode_ci;

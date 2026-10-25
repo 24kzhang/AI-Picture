@@ -5,7 +5,7 @@ server:
 
 spring:
   application:
-    name: AI 协同云图库
+    name: AI 协同云影库
   web:
     resources:
       cache:
@@ -44,7 +44,7 @@ mybatis-plus:
 knife4j:
   enable: true
   openapi:
-    title: AI 协同云图库接口文档
+    title: AI 协同云影库接口文档
     version: v2.0
     group:
       default:

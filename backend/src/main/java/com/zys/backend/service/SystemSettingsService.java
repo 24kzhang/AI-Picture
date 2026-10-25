@@ -177,7 +177,7 @@ public class SystemSettingsService {
                 Files.createDirectories(parent);
             }
             List<String> lines = new ArrayList<>();
-            lines.add("# AI 协同云图库本机运行配置，请勿提交到版本库。");
+            lines.add("# AI 协同云影库本机运行配置，请勿提交到版本库。");
             for (String key : PROPERTY_NAMES.keySet()) {
                 String value = values.getProperty(key);
                 if (value != null) {
